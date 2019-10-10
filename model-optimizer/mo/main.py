@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -27,8 +27,9 @@ import numpy as np
 from mo.utils import import_extensions
 from mo.utils.cli_parser import get_placeholder_shapes, get_tuple_values, get_model_name, \
     get_common_cli_options, get_caffe_cli_options, get_tf_cli_options, get_mxnet_cli_options, get_kaldi_cli_options, \
-    get_onnx_cli_options, get_mean_scale_dictionary, parse_tuple_pairs
-from mo.utils.error import Error
+    get_onnx_cli_options, get_mean_scale_dictionary, parse_tuple_pairs, get_freeze_placeholder_values, \
+    append_exp_keys_to_namespace
+from mo.utils.error import Error, FrameworkError
 from mo.utils.guess_framework import guess_framework_by_ext
 from mo.utils.logger import init_logger
 from mo.utils.utils import refer_to_faq_msg
@@ -197,6 +198,10 @@ def driver(argv: argparse.Namespace):
             'Both --scale and --scale_values are defined. Specify either scale factor or scale values per input ' +
             'channels. ' + refer_to_faq_msg(19))
 
+    if argv.scale and argv.scale < 1.0:
+        log.error("The scale value is less than 1.0. This is most probably an issue because the scale value specifies "
+                  "floating point value which all input values will be *divided*.", extra={'is_warning': True})
+
     if argv.input_model and (is_tf and argv.saved_model_dir):
         raise Error('Both --input_model and --saved_model_dir are defined. '
                     'Specify either input model or saved model directory.')
@@ -206,16 +211,14 @@ def driver(argv: argparse.Namespace):
                 raise Error('Incorrect saved model tag was provided. Specify --saved_model_tags with no spaces in it')
             argv.saved_model_tags = argv.saved_model_tags.split(',')
 
-    outputs = None
+    argv.output = argv.output.split(',') if argv.output else None
 
-    if argv.output:
-        outputs = argv.output.split(',')
-
-    placeholder_shapes = get_placeholder_shapes(argv.input, argv.input_shape, argv.batch)
+    argv.placeholder_shapes = get_placeholder_shapes(argv.input, argv.input_shape, argv.batch)
 
     mean_values = parse_tuple_pairs(argv.mean_values)
     scale_values = parse_tuple_pairs(argv.scale_values)
     mean_scale = get_mean_scale_dictionary(mean_values, scale_values, argv.input)
+    argv.mean_scale_values = mean_scale
 
     if not os.path.exists(argv.output_dir):
         try:
@@ -229,7 +232,7 @@ def driver(argv: argparse.Namespace):
             raise Error("Output directory {} is not writable for current user. " +
                         refer_to_faq_msg(22), argv.output_dir)
 
-    log.debug("Placeholder shapes : {}".format(placeholder_shapes))
+    log.debug("Placeholder shapes : {}".format(argv.placeholder_shapes))
 
     ret_res = 1
     if hasattr(argv, 'extensions') and argv.extensions and argv.extensions != '':
@@ -237,65 +240,42 @@ def driver(argv: argparse.Namespace):
     else:
         extensions = None
 
-    if argv.freeze_placeholder_with_value is not None:
-        replacements = {}
-        for replace in argv.freeze_placeholder_with_value.split(','):
-            rp = replace.split('->')
-            if len(rp) != 2:
-                raise Error("Wrong replacement syntax. Use --freeze_placeholder_with_value "
-                            "node1_name->value1,node2_name->value2")
-            if rp[0] in replacements and replacements[rp[0]] != rp[1]:
-                raise Error("Overriding replacement value of placeholder with name '{}': old value = {}, new value = {}"
-                            ".".format(rp[0], replacements[rp[0]], rp[1]))
-            value = rp[1]
-            if ' ' in value.strip(' '):
-                value = value.replace('[', '').replace(']', '').split(' ')
-            replacements[rp[0]] = value
-        argv.freeze_placeholder_with_value = replacements
+    argv.freeze_placeholder_with_value, argv.input = get_freeze_placeholder_values(argv.input,
+                                                                                   argv.freeze_placeholder_with_value)
 
     if is_tf:
         import mo.pipeline.tf as mo_tf
-        from mo.front.tf.register_custom_ops import update_registration
-        import_extensions.load_dirs(argv.framework, extensions, update_registration)
-        ret_res = mo_tf.tf2nx(argv, argv.input_model, model_name, outputs, argv.output_dir, argv.scale,
-                              is_binary=not argv.input_model_is_text,
-                              user_shapes=placeholder_shapes,
-                              mean_scale_values=mean_scale)
+        from mo.front.tf.register_custom_ops import get_front_classes
+        import_extensions.load_dirs(argv.framework, extensions, get_front_classes)
+        ret_res = mo_tf.tf2nx(argv, argv.input_model, model_name, argv.output_dir,
+                              is_binary=not argv.input_model_is_text)
 
     elif is_caffe:
         import mo.pipeline.caffe as mo_caffe
-        from mo.front.caffe.register_custom_ops import update_registration
-        import_extensions.load_dirs(argv.framework, extensions, update_registration)
-        ret_res = mo_caffe.driver(argv, argv.input_proto, argv.input_model, model_name, outputs, argv.output_dir,
-                                  argv.scale,
-                                  user_shapes=placeholder_shapes,
-                                  mean_scale_values=mean_scale,
+        from mo.front.caffe.register_custom_ops import get_front_classes
+        import_extensions.load_dirs(argv.framework, extensions, get_front_classes)
+        ret_res = mo_caffe.driver(argv, argv.input_proto, argv.input_model, model_name, argv.output_dir,
+                                  argv.caffe_parser_path,
                                   mean_file=argv.mean_file,
                                   mean_file_offsets=mean_file_offsets,
                                   custom_layers_mapping_path=custom_layers_mapping_path)
 
     elif is_mxnet:
         import mo.pipeline.mx as mo_mxnet
-        from mo.front.mxnet.register_custom_ops import update_registration
-        import_extensions.load_dirs(argv.framework, extensions, update_registration)
-        ret_res = mo_mxnet.driver(argv, argv.input_model, model_name, outputs, argv.output_dir, argv.scale,
-                                  placeholder_shapes=placeholder_shapes,
-                                  mean_scale_values=mean_scale)
+        from mo.front.mxnet.register_custom_ops import get_front_classes
+        import_extensions.load_dirs(argv.framework, extensions, get_front_classes)
+        ret_res = mo_mxnet.driver(argv, argv.input_model, model_name, argv.output_dir)
 
     elif is_kaldi:
         import mo.pipeline.kaldi as mo_kaldi
-        from mo.front.kaldi.register_custom_ops import update_registration
-        import_extensions.load_dirs(argv.framework, extensions, update_registration)
-        ret_res = mo_kaldi.driver(argv, argv.input_model, model_name, outputs, argv.output_dir, argv.scale,
-                                  placeholder_shapes=placeholder_shapes,
-                                  mean_scale_values=mean_scale)
+        from mo.front.kaldi.register_custom_ops import get_front_classes
+        import_extensions.load_dirs(argv.framework, extensions, get_front_classes)
+        ret_res = mo_kaldi.driver(argv, argv.input_model, model_name, argv.output_dir)
     elif is_onnx:
         import mo.pipeline.onnx as mo_onnx
-        from mo.front.onnx.register_custom_ops import update_registration
-        import_extensions.load_dirs(argv.framework, extensions, update_registration)
-        ret_res = mo_onnx.driver(argv, argv.input_model, model_name, outputs, argv.output_dir, argv.scale,
-                                 user_shapes=placeholder_shapes,
-                                 mean_scale_values=mean_scale)
+        from mo.front.onnx.register_custom_ops import get_front_classes
+        import_extensions.load_dirs(argv.framework, extensions, get_front_classes)
+        ret_res = mo_onnx.driver(argv, argv.input_model, model_name, argv.output_dir)
 
     if ret_res != 0:
         return ret_res
@@ -318,12 +298,16 @@ def main(cli_parser: argparse.ArgumentParser, framework: str):
         argv = cli_parser.parse_args()
         if framework:
             argv.framework = framework
+        append_exp_keys_to_namespace(argv)
         return driver(argv)
     except (FileNotFoundError, NotADirectoryError) as e:
         log.error('File {} was not found'.format(str(e).split('No such file or directory:')[1]))
         log.debug(traceback.format_exc())
     except Error as err:
         log.error(err)
+        log.debug(traceback.format_exc())
+    except FrameworkError as err:
+        log.error(err, extra={'framework_error': True})
         log.debug(traceback.format_exc())
     except Exception as err:
         log.error("-------------------------------------------------")

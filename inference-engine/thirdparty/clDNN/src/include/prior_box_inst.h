@@ -16,25 +16,23 @@
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma once
-#include "api/CPP/prior_box.hpp"
+#include "api/prior_box.hpp"
 #include "primitive_inst.h"
+#include <string>
+#include <memory>
 
-#include <boost/optional.hpp>
-
-namespace cldnn
-{
+namespace cldnn {
 
 template <>
-struct typed_program_node<prior_box> : typed_program_node_base<prior_box>
-{
+struct typed_program_node<prior_box> : typed_program_node_base<prior_box> {
     using parent = typed_program_node_base<prior_box>;
 
     typed_program_node(std::shared_ptr<prior_box> prim, program_impl& prog);
 
-    decltype(auto) input() const { return get_dependency(0); }
+    program_node& input() const { return get_dependency(0); }
 
     void calc_result();
-    memory_impl& get_result_buffer() const { return *result; }
+    memory_impl::ptr get_result_buffer() const { return result; }
 
 private:
     memory_impl::ptr result;
@@ -43,19 +41,19 @@ private:
 using prior_box_node = typed_program_node<prior_box>;
 
 template <>
-class typed_primitive_inst<prior_box> : public typed_primitive_inst_base<prior_box>
-{
+class typed_primitive_inst<prior_box> : public typed_primitive_inst_base<prior_box> {
     using parent = typed_primitive_inst_base<prior_box>;
 
 public:
     static layout calc_output_layout(prior_box_node const& node);
     static std::string to_string(prior_box_node const& node);
+
 public:
     typed_primitive_inst(network_impl& network, prior_box_node const& node);
 
-    decltype(auto) input_memory() const { return dep_memory(0); }
+    memory_impl& input_memory() const { return dep_memory(0); }
 };
 
 using prior_box_inst = typed_primitive_inst<prior_box>;
 
-}
+}  // namespace cldnn

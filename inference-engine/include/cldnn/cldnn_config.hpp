@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -12,7 +11,7 @@
 #pragma once
 
 #include <string>
-#include "../ie_plugin_config.hpp"
+#include "ie_plugin_config.hpp"
 
 namespace InferenceEngine {
 
@@ -56,6 +55,11 @@ DECLARE_CLDNN_CONFIG_KEY(GRAPH_DUMPS_DIR);
 * @brief This key defines the directory name to which full program sources will be dumped.
 */
 DECLARE_CLDNN_CONFIG_KEY(SOURCES_DUMPS_DIR);
+
+/**
+* @brief This key turns usage of int8 optimizations and qunatized models on.
+*/
+DECLARE_CLDNN_CONFIG_KEY(INT8_ENABLED);
 
 }  // namespace CLDNNConfigParams
 }  // namespace InferenceEngine

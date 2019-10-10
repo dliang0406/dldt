@@ -16,7 +16,4 @@
 
 #include "common.cl"
 #include "data_types.cl"
-#include "activation_functions.cl"
-#include "sub_group.cl"
-#include "reshape_dims.cl"
 #include "fetch.cl"

@@ -1,12 +1,10 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include <gtest/gtest.h>
 #include <gmock/gmock-spec-builders.h>
 #include "mkldnn_plugin/mkldnn_graph.h"
-#include "mock_mkldnn_primitive.hpp"
 
 #include "single_layer_common.hpp"
 #include <mkldnn_plugin/mkldnn_extension_utils.h>
@@ -94,7 +92,7 @@ TEST_F(MKLDNNGraphOptimizationTests, TestNoFuseConvSumWithOneInput) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {48});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {48}, InferenceEngine::C });
     weights->allocate();
     float * data = weights->buffer();
 
@@ -209,7 +207,7 @@ TEST_F(MKLDNNGraphOptimizationTests, TestNoCrashForFuseConvSumAndInput) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {48});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {48}, InferenceEngine::C });
     weights->allocate();
     float * data = weights->buffer();
 
@@ -225,7 +223,7 @@ TEST_F(MKLDNNGraphOptimizationTests, TestNoCrashForFuseConvSumAndInput) {
     bool fused = false;
     auto& nodes = graph.getNodes();
     for (auto &node : nodes) {
-        if (node->getType() == MKLDNNPlugin::Convolution_Sum) {
+        if (node->isFusedWith(MKLDNNPlugin::Eltwise)) {
             fused = true;
         }
     }
@@ -423,7 +421,7 @@ TEST_F(MKLDNNGraphOptimizationTests, TestNoFuseCustomActivation) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {139776});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {139776}, InferenceEngine::C });
     weights->allocate();
     float * data = weights->buffer();
 

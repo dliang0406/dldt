@@ -12,18 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 # ========================================= Name / Output settings =====================================
 
-set(CLDNN_BUILD__PROJ             "tests")
+set(CLDNN_BUILD__PROJ             "clDNN_unit_tests")
 set(CLDNN_BUILD__PROJ_LABEL       "${CLDNN_BUILD__PROJ}")
 set(CLDNN_BUILD__PROJ_OUTPUT_NAME "${CLDNN_BUILD__PROJ}${CLDNN__OUT_CPU_SUFFIX}")
 
 # =========================================== Compiler options =========================================
-
 intel_config_flag_apply_settings(CompilerOptions CMAKE_CXX_FLAGS ALL_PATTERN ""
     SET
       WarnLevel3
+      StandardCxx11
   )
 if (NOT MSVC)
   intel_config_flag_apply_settings(CompilerOptions CMAKE_CXX_FLAGS ALL_PATTERN ""
@@ -125,7 +124,6 @@ add_executable("${CLDNN_BUILD__PROJ}"
   )
 set_property(TARGET "${CLDNN_BUILD__PROJ}" PROPERTY PROJECT_LABEL "${CLDNN_BUILD__PROJ_LABEL}")
 set_property(TARGET "${CLDNN_BUILD__PROJ}" PROPERTY OUTPUT_NAME   "${CLDNN_BUILD__PROJ_OUTPUT_NAME}")
-
 
 # Set library dependencies
 target_link_libraries("${CLDNN_BUILD__PROJ}"

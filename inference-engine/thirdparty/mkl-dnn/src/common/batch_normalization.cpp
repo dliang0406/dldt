@@ -36,7 +36,7 @@ status_t bnrm_desc_init(batch_normalization_desc_t *bnrm_desc,
         && !any_null(bnrm_desc, data_desc)
         && one_of(prop_kind, forward_training, forward_inference,
                 backward_data, backward)
-        && implication(prop_kind & backward, diff_data_desc != nullptr);
+        && IMPLICATION(prop_kind & backward, diff_data_desc != nullptr);
     if (!args_ok) return invalid_arguments;
 
     auto bd = batch_normalization_desc_t();
@@ -50,18 +50,18 @@ status_t bnrm_desc_init(batch_normalization_desc_t *bnrm_desc,
 
     dims_t scaleshift_dims = { 2, data_desc->dims[1] };
     mkldnn_memory_desc_init(&bd.data_scaleshift_desc, 2, scaleshift_dims,
-            data_desc->data_type, mkldnn_nc);
+            data_type::f32, mkldnn_nc);
     bd.diff_data_scaleshift_desc = zero_md();
     if (bd.prop_kind == backward) {
         mkldnn_memory_desc_init(&bd.diff_data_scaleshift_desc, 2,
-                scaleshift_dims, data_desc->data_type, mkldnn_nc);
+                scaleshift_dims, data_type::f32, mkldnn_nc);
     }
 
     dims_t stats_dims = { data_desc->dims[1] };
     mkldnn_memory_desc_init(&bd.mean_desc, 1, stats_dims,
-            data_desc->data_type, mkldnn_x);
+            data_type::f32, mkldnn_x);
     mkldnn_memory_desc_init(&bd.variance_desc, 1, stats_dims,
-            data_desc->data_type, mkldnn_x);
+            data_type::f32, mkldnn_x);
 
     bd.batch_norm_epsilon = epsilon;
 
@@ -72,7 +72,6 @@ status_t bnrm_desc_init(batch_normalization_desc_t *bnrm_desc,
     bd.flags = flags;
 
     bool consistency = true
-        && memory_desc_wrapper(bd.data_desc).nelems()
         && utils::one_of(bd.data_desc.ndims, 2, 4, 5);
     if (bd.prop_kind == backward_data)
         consistency = consistency

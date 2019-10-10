@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -14,61 +14,48 @@
  limitations under the License.
 """
 
-from mo.ops.tile import Tile
-import networkx as nx
-from mo.back.replacement import BackReplacementPattern
-from mo.graph.graph import unique_id, Node
-
 import logging as log
+
+import networkx as nx
+import numpy as np
+
+from mo.back.replacement import BackReplacementPattern
+from mo.graph.graph import Node, Graph
+from mo.ops.tile import Tile
+from mo.ops.broadcast import Broadcast
+from mo.ops.const import Const
 
 
 class EltwiseBroadcast(BackReplacementPattern):
     enabled = True
+    graph_condition = [lambda graph: graph.graph['cmd_params'].generate_experimental_IR_V10]
 
-    def pattern(self):
+    @staticmethod
+    def pattern():
         return dict(
             nodes=[
-                ('op', dict(kind='op', type='Eltwise'))],
-            edges=[],
-            node_attrs=['kind', 'type'],
-            edge_attrs=[])
+                ('op', dict(kind='op', is_eltwise=True))],
+            edges=[]
+        )
 
-    def replace_pattern(self, graph: nx.MultiDiGraph, match: dict):
+    @staticmethod
+    def replace_pattern(graph: Graph, match: dict):
         node = match['op']
         shapes = [in_node.shape for _, in_node in node.in_nodes().items()]
         out_shape = node.out_node().shape
-        tname = node.name + '/Broadcast/'
-        tile = Tile(graph, dict(name=tname))
-        if not all([len(shape) == len(out_shape) for shape in shapes]):
-            log.warning("Cannot apply broadcast for Eltwise layer {} "
-                "because not all input shapes {} have the same number of elements "
-                "as output shape {}.".format(
-                    node.soft_get('name'),
-                    shapes,
-                    out_shape
-                )
-            )
-            return
+        broadcast_name = node.name + '/Broadcast/'
 
-        input_idx = 0
-        for port, old_input in node.in_nodes().items():
-            # old_input = node.in_node(input_idx)
-            input = old_input
-            for i in range(len(out_shape)):
-                if shapes[input_idx][i] == 1 and out_shape[i] > 1:
-                    new_op = tile.create_node([input], dict(axis=i, tiles=out_shape[i]))
-                    # add a data node following a new operation node
-                    data_id = unique_id(graph, node.name)
-                    graph.add_node(data_id, kind='data', shape=None, value=None)
-                    new_data = Node(graph, data_id)
-                    graph.add_edge(new_op.id, new_data.id, **{'out': 0})
-                    new_op.infer(new_op)
-                    input = new_data
-            if input != old_input:
-                # create a new edge from new data node after Tile application to the eltwise
-                # and copy all edge attributes from the old edge
-                # [0] is not what we really want
-                graph.add_edge(input.id, node.id, **graph[old_input.id][node.id][0])
-                graph.remove_edge(old_input.id, node.id)
-            input_idx += 1
-
+        for i, shape in enumerate(shapes):
+            if not np.array_equal(shape, out_shape):
+                # Add Broadcast op for this input
+                # Need to create additional Const op for shape
+                new_shape = Const(graph, {'name': broadcast_name + 'Shape', 'value': out_shape.copy()}).create_node()
+                broadcast_axis = Const(graph, {
+                    'name': broadcast_name + 'Axis',
+                    'value': np.array(range(len(out_shape)), dtype=np.int64)}
+                ).create_node()
+                broadcast = Broadcast(graph, {'name': broadcast_name}).create_node()
+                node.in_port(i).get_connection().set_destination(broadcast.in_port(0))
+                broadcast.in_port(1).connect(new_shape.out_port(0))
+                broadcast.in_port(2).connect(broadcast_axis.out_port(0))
+                broadcast.out_port(0).connect(node.in_port(i))

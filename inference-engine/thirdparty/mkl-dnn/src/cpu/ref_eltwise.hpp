@@ -24,6 +24,7 @@
 #include "cpu_engine.hpp"
 #include "type_helpers.hpp"
 #include "utils.hpp"
+#include "cpu_isa_traits.hpp"
 
 namespace mkldnn {
 namespace impl {
@@ -31,13 +32,16 @@ namespace cpu {
 
 struct ref_eltwise_scalar_fwd_t {
 public:
-    ref_eltwise_scalar_fwd_t(const alg_kind_t alg, float alpha, float beta);
+    ref_eltwise_scalar_fwd_t(alg_kind_t alg, float alpha, float beta);
+
+    // note that eltwise.scale is ignored
+    ref_eltwise_scalar_fwd_t(const post_ops_t::entry_t::eltwise_t &eltwise);
+
     float compute_scalar(float s);
 
-private:
-    alg_kind_t alg;
-    float alpha;
-    float beta;
+    const alg_kind_t alg_;
+    const float alpha_;
+    const float beta_;
 };
 
 template <impl::data_type_t data_type>
@@ -63,9 +67,13 @@ struct ref_eltwise_fwd_t: public cpu_primitive_t {
                 || (src_d.is_dense(true) && is_zero_preserved());
 
             use_nCspBc_padded_ = !use_dense_
-                && one_of(desc()->data_desc.format, nChw8c, nChw16c, nCdhw16c)
+                && one_of(desc()->data_desc.format, nChw8c, nChw16c,
+                    nCdhw8c, nCdhw16c)
                 && src_d.only_padded_dim(1)
                 && src_d.is_dense(true);
+
+            if (has_zero_dim_memory())
+                use_dense_ = use_nCspBc_padded_ = false;
 
             const bool use_generic = !use_dense_ && !use_nCspBc_padded_;
 
@@ -73,8 +81,9 @@ struct ref_eltwise_fwd_t: public cpu_primitive_t {
                 && one_of(desc()->prop_kind, forward_training,
                         forward_inference)
                 && everyone_is(data_type, desc()->data_desc.data_type)
-                && implication(use_generic, one_of(src_d.ndims(), 4, 5))
-                && attr()->has_default_values();
+                && IMPLICATION(use_generic, one_of(src_d.ndims(), 4, 5))
+                && attr()->has_default_values()
+                && IMPLICATION(data_type == data_type::bf16, mayiuse(avx512_core));
             if (!ok) return status::unimplemented;
 
             return status::success;
@@ -83,15 +92,19 @@ struct ref_eltwise_fwd_t: public cpu_primitive_t {
         bool use_dense_, use_nCspBc_padded_;
     };
 
-    ref_eltwise_fwd_t(const pd_t *pd, const input_vector &inputs,
+    ref_eltwise_fwd_t(const pd_t *apd, const input_vector &inputs,
             const output_vector &outputs)
-        : cpu_primitive_t(&conf_, inputs, outputs), conf_(*pd) {}
+        : cpu_primitive_t(apd, inputs, outputs) {
+    }
+
+    ~ref_eltwise_fwd_t() {}
+
     typedef typename prec_traits<data_type>::type data_t;
 
-    virtual void execute(event_t *e) {
-        if (conf_.use_dense_)
+    virtual void execute(event_t *e) const {
+        if (pd()->use_dense_)
             execute_forward_dense();
-        else if (conf_.use_nCspBc_padded_)
+        else if (pd()->use_nCspBc_padded_)
             execute_forward_nCspBc_padded();
         else
             execute_forward_generic();
@@ -99,10 +112,10 @@ struct ref_eltwise_fwd_t: public cpu_primitive_t {
     }
 
 private:
-    void execute_forward_nCspBc_padded();
-    void execute_forward_dense();
-    void execute_forward_generic();
-    pd_t conf_;
+    void execute_forward_nCspBc_padded() const;
+    void execute_forward_dense() const;
+    void execute_forward_generic() const;
+    const pd_t *pd() const { return (const pd_t *)primitive_t::pd(); }
 };
 
 template <impl::data_type_t data_type>
@@ -122,7 +135,9 @@ struct ref_eltwise_bwd_t: public cpu_primitive_t {
             bool ok = true && desc()->prop_kind == backward_data
                     && everyone_is(data_type, desc()->data_desc.data_type,
                             desc()->diff_data_desc.data_type)
-                    && attr()->has_default_values();
+                    && attr()->has_default_values()
+                    && IMPLICATION(data_type == data_type::bf16,
+                            mayiuse(avx512_core));
             if (!ok) return status::unimplemented;
 
             auto diff_dst_d = memory_desc_wrapper(diff_dst_pd());
@@ -131,10 +146,14 @@ struct ref_eltwise_bwd_t: public cpu_primitive_t {
             use_dense_ = true
                 && same_fmt_
                 && diff_dst_d.is_dense(true)
-                && is_zero_preserved();
+                && is_zero_preserved()
+                && !has_zero_dim_memory();
             const bool use_generic = !use_dense_;
 
             if (use_generic && !one_of(diff_dst_d.ndims(), 4, 5))
+                return status::unimplemented;
+
+            if (desc()->alg_kind == mkldnn_eltwise_not)
                 return status::unimplemented;
 
             return status::success;
@@ -143,21 +162,24 @@ struct ref_eltwise_bwd_t: public cpu_primitive_t {
         bool use_dense_;
     };
 
-    ref_eltwise_bwd_t(const pd_t *pd, const input_vector &inputs,
+    ref_eltwise_bwd_t(const pd_t *apd, const input_vector &inputs,
             const output_vector &outputs)
-        : cpu_primitive_t(&conf_, inputs, outputs), conf_(*pd) {}
+        : cpu_primitive_t(apd, inputs, outputs) {}
+
+    ~ref_eltwise_bwd_t() {}
+
     typedef typename prec_traits<data_type>::type data_t;
 
-    virtual void execute(event_t *e) {
-        if (conf_.use_dense_) execute_backward_dense();
+    virtual void execute(event_t *e) const {
+        if (pd()->use_dense_) execute_backward_dense();
         else execute_backward_generic();
         e->set_state(event_t::ready);
     }
 
 private:
-    void execute_backward_dense();
-    void execute_backward_generic();
-    pd_t conf_;
+    void execute_backward_dense() const;
+    void execute_backward_generic() const;
+    const pd_t *pd() const { return (const pd_t *)primitive_t::pd(); }
 };
 
 }

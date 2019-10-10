@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "include/include_all.cl"
+#include "include/sub_group.cl"
 
 __attribute__((reqd_work_group_size(LOCAL_WORK_GROUP_SIZE, 1, 1)))
 KERNEL(convolution_gpu_yxfb_yxio_b1_block_multiple_x)(
@@ -197,7 +198,7 @@ KERNEL(convolution_gpu_yxfb_yxio_b1_block_multiple_x)(
 #endif
     for(uint a = 0; a < X_PER_WORK_ITEM; a++)
     {
-        _data[a] = ACTIVATION(_data[a], NL_M, NL_N);
+        _data[a] = ACTIVATION(_data[a], ACTIVATION_PARAMS);
     }
 
     BLOCK_WRITE(output + out_id[0], _data[0]);

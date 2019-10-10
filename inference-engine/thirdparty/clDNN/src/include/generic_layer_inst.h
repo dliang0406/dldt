@@ -18,32 +18,30 @@
 #pragma once
 #include "generic_layer.hpp"
 #include "primitive_inst.h"
+#include <string>
+#include <memory>
 
-namespace cldnn
-{
+namespace cldnn {
 
 template <>
-struct typed_program_node<generic_layer> : public typed_program_node_base<generic_layer>
-{
+struct typed_program_node<generic_layer> : public typed_program_node_base<generic_layer> {
     using parent = typed_program_node_base<generic_layer>;
+    typed_program_node(const std::shared_ptr<generic_layer> prim, program_impl& prog);
+
 public:
     using parent::parent;
 
-    decltype(auto) input() const { return get_dependency(0); }
+    program_node& input() const { return get_dependency(0); }
 };
 
 using generic_layer_node = typed_program_node<generic_layer>;
 
 template <>
-class typed_primitive_inst<generic_layer> : public typed_primitive_inst_base<generic_layer>
-{
+class typed_primitive_inst<generic_layer> : public typed_primitive_inst_base<generic_layer> {
     using parent = typed_primitive_inst_base<generic_layer>;
 
 public:
-    static layout calc_output_layout(generic_layer_node const& node)
-    {
-        return node.get_primitive()->output_layout;
-    }
+    static layout calc_output_layout(generic_layer_node const& node) { return node.get_primitive()->output_layout; }
 
     static std::string to_string(generic_layer_node const& node);
 
@@ -53,4 +51,4 @@ public:
 
 using generic_layer_inst = typed_primitive_inst<generic_layer>;
 
-}
+}  // namespace cldnn

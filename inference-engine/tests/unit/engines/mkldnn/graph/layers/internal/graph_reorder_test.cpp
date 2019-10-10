@@ -1,17 +1,13 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include <gtest/gtest.h>
 #include <gmock/gmock-spec-builders.h>
 #include "mkldnn_plugin/mkldnn_graph.h"
-#include "mock_mkldnn_primitive.hpp"
 
 #include "test_graph.hpp"
 
-#include <mock_mkldnn_extension.hpp>
-#include <mkldnn/mkldnn_extension_ptr.hpp>
 #include <mock_error_listener.hpp>
 #include <mkldnn_plugin/mkldnn_extension_mngr.h>
 #include "tests_common.hpp"
@@ -88,9 +84,9 @@ TEST_F(MKLDNNGraphReorderTests, CreateReorder) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C,
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8,
                                                                                    {(1 * 1 * 17 * 9 / 1 + 17)
-                                                      * sizeof(float)});
+                                                      * sizeof(float)}, InferenceEngine::C });
     weights->allocate();
     fill_data((float *) weights->buffer(), weights->size() / sizeof(float));
     InferenceEngine::TBlob<uint8_t>::Ptr weights_ptr = InferenceEngine::TBlob<uint8_t>::Ptr(weights);
@@ -104,7 +100,7 @@ TEST_F(MKLDNNGraphReorderTests, CreateReorder) {
     for (int i = 0; i < nodes.size(); i++) {
         if (nodes[i]->getType() == MKLDNNPlugin::Reorder) {
             ASSERT_EQ(1, nodes[i]->getSupportedPrimitiveDescriptors().size());
-            ASSERT_EQ(MKLDNNPlugin::impl_desc_type::reorder,
+            ASSERT_EQ(MKLDNNPlugin::impl_desc_type::ref_any,
                       nodes[i]->getSupportedPrimitiveDescriptors()[0].getImplementationType());
             ASSERT_EQ(1, nodes[i]->getSupportedPrimitiveDescriptors()[0].getConfig().inConfs.size());
             if (i == 1) {
@@ -200,7 +196,7 @@ TEST_F(MKLDNNGraphReorderTests, CreateInPlaceReorder) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {24});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {24}, InferenceEngine::C });
     weights->allocate();
     float *data = weights->buffer().as<float *>();
     size_t dataSize = weights->byteSize() / sizeof(float);
@@ -217,7 +213,7 @@ TEST_F(MKLDNNGraphReorderTests, CreateInPlaceReorder) {
 
     InferenceEngine::SizeVector dims_src = {1, 9, 16, 32};
 
-    InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src);
+    InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src, InferenceEngine::NCHW});
     src->allocate();
     data = src->buffer().as<float *>();
     dataSize = src->size();

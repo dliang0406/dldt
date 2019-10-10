@@ -17,6 +17,8 @@
 #include "c_types_map.hpp"
 #include "type_helpers.hpp"
 #include "mkldnn_thread.hpp"
+#include "mkldnn_traits.hpp"
+#include "math_utils.hpp"
 
 #include "ref_inner_product.hpp"
 
@@ -24,231 +26,254 @@ namespace mkldnn {
 namespace impl {
 namespace cpu {
 
-using namespace mkldnn::impl::data_type;
+using math::saturate;
+using math::get_bias;
 
 template <data_type_t src_type, data_type_t wei_type, data_type_t dst_type,
          data_type_t acc_type>
 void ref_inner_product_fwd_t<src_type, wei_type, dst_type, acc_type>
-        ::execute_forward() {
+        ::execute_forward() const {
     auto src = reinterpret_cast<const src_data_t *>(this->input_memory(0));
     auto weights = reinterpret_cast<const wei_data_t *>(this->input_memory(1));
-    auto bias = reinterpret_cast<const dst_data_t *>(this->input_memory(2));
+    auto bias = reinterpret_cast<const char *>(this->input_memory(2));
     auto dst = reinterpret_cast<dst_data_t *>(this->memory());
 
-    const memory_desc_wrapper src_d(conf_.src_pd());
-    const memory_desc_wrapper dst_d(conf_.dst_pd());
-    const memory_desc_wrapper weights_d(conf_.weights_pd(0));
-    const memory_desc_wrapper bias_d(conf_.weights_pd(1));
+    const memory_desc_wrapper src_d(pd()->src_pd());
+    const memory_desc_wrapper dst_d(pd()->dst_pd());
+    const memory_desc_wrapper weights_d(pd()->weights_pd(0));
+    const memory_desc_wrapper bias_d(pd()->weights_pd(1));
 
-    const int MB = conf_.MB();
-    const int OC = conf_.OC();
-    const int IC = conf_.IC();
+    const int MB = pd()->MB();
+    const int OC = pd()->OC();
+    const int IC = pd()->IC();
 
-    const bool src_has_spatial = utils::one_of(src_d.ndims(), 4, 5);
+    const bool src_has_spatial = utils::one_of(src_d.ndims(), 3, 4, 5);
+    const int ndims = src_d.ndims() - 2;
 
-    const bool is_3d = src_d.ndims() == 5;
+    const auto &post_ops = pd()->attr()->post_ops_;
+    const bool do_relu = post_ops.len_ == 1;
+    const float nslope = do_relu ? post_ops.entry_[0].eltwise.alpha : 0.f;
 
-    auto ker_has_spatial = [=](acc_data_t &d, int mb, int oc) {
-        const int KD = conf_.KD();
-        const int KH = conf_.KH();
-        const int KW = conf_.KW();
+    auto ker_has_spatial = [=](int mb, int oc) {
+        acc_data_t d = 0;
+        const int KD = pd()->KD();
+        const int KH = pd()->KH();
+        const int KW = pd()->KW();
         for (int ic = 0; ic < IC; ++ic) {
             for (int kd = 0; kd < KD; ++kd) {
                 for (int kh = 0; kh < KH; ++kh) {
                     for (int kw = 0; kw < KW; ++kw) {
-                        if (is_3d)
+                        switch (ndims) {
+                        case 3:
                             d += (acc_data_t)src[src_d.off(mb, ic, kd, kh, kw)]
-                                * weights[weights_d.off(oc, ic, kd, kh, kw)];
-                        else
+                                    * weights[weights_d.off(
+                                              oc, ic, kd, kh, kw)];
+                            break;
+                        case 2:
                             d += (acc_data_t)src[src_d.off(mb, ic, kh, kw)]
-                                * weights[weights_d.off(oc, ic, kh, kw)];
+                                    * weights[weights_d.off(oc, ic, kh, kw)];
+                            break;
+                        case 1:
+                            d += (acc_data_t)src[src_d.off(mb, ic, kw)]
+                                    * weights[weights_d.off(oc, ic, kw)];
+                            break;
+                        default: assert(!"unsupported ndims size");
+                        }
                     }
                 }
             }
         }
+        return d;
     };
 
-    auto ker_no_spatial = [=](acc_data_t &d, int mb, int oc) {
+    auto ker_no_spatial = [=](int mb, int oc) {
+        acc_data_t d = 0;
         for (int ic = 0; ic < IC; ++ic) {
             d += (acc_data_t)src[src_d.off(mb, ic)]
                 * weights[weights_d.off(oc, ic)];
         }
+        return d;
     };
 
-#   pragma omp parallel for collapse(2) schedule(static)
-    for (int mb = 0; mb < MB; ++mb) {
-        for (int oc = 0; oc < OC; ++oc) {
-            acc_data_t a = bias ? bias[bias_d.off(oc)] : (dst_data_t)0;
-            if (src_has_spatial) {
-                ker_has_spatial(a, mb, oc);
-            } else {
-                ker_no_spatial(a, mb, oc);
-            }
-            dst[dst_d.off(mb, oc)] = (dst_data_t)a;
-        }
-    }
+    parallel_nd(MB, OC, [&](int mb, int oc) {
+        float a = bias
+            ? get_bias(bias, bias_d.off(oc), pd()->desc()->bias_desc.data_type)
+            : 0;
+        if (src_has_spatial)
+            a += ker_has_spatial(mb, oc);
+        else
+            a += ker_no_spatial(mb, oc);
+        if (do_relu && a < (acc_data_t)0)
+            a *= nslope;
+        dst[dst_d.off(mb, oc)] = saturate<dst_data_t>(a);
+    });
 }
-
+using namespace data_type;
 template struct ref_inner_product_fwd_t<f32>;
 template struct ref_inner_product_fwd_t<s16, s16, s32, s32>;
+template struct ref_inner_product_fwd_t<u8, s8, f32, s32>;
+template struct ref_inner_product_fwd_t<u8, s8, s32, s32>;
+template struct ref_inner_product_fwd_t<u8, s8, s8, s32>;
 template struct ref_inner_product_fwd_t<u8, s8, u8, s32>;
 
 template <data_type_t diff_src_type, data_type_t wei_type,
          data_type_t diff_dst_type, data_type_t acc_type>
 void ref_inner_product_bwd_data_t<diff_src_type, wei_type, diff_dst_type,
-     acc_type>::execute_backward_data() {
+     acc_type>::execute_backward_data() const {
     auto diff_dst = reinterpret_cast<const diff_dst_data_t *>(
             this->input_memory(0));
     auto weights = reinterpret_cast<const wei_data_t *>(this->input_memory(1));
     auto diff_src = reinterpret_cast<diff_src_data_t*>(this->memory());
 
-    const memory_desc_wrapper diff_dst_d(conf_.diff_dst_pd());
-    const memory_desc_wrapper weights_d(conf_.weights_pd(0));
-    const memory_desc_wrapper diff_src_d(conf_.diff_src_pd());
+    const memory_desc_wrapper diff_dst_d(pd()->diff_dst_pd());
+    const memory_desc_wrapper weights_d(pd()->weights_pd(0));
+    const memory_desc_wrapper diff_src_d(pd()->diff_src_pd());
 
-    const int MB = conf_.MB();
-    const int OC = conf_.OC();
-    const int IC = conf_.IC();
+    const int MB = pd()->MB();
+    const int OC = pd()->OC();
+    const int IC = pd()->IC();
 
-    const bool diff_src_has_spatial = utils::one_of(diff_src_d.ndims(), 4, 5);
+    const bool diff_src_has_spatial
+            = utils::one_of(diff_src_d.ndims(), 3, 4, 5);
+    const int ndims = diff_src_d.ndims() - 2;
 
-    const bool is_3d = diff_src_d.ndims() == 5;
-
-#   pragma omp parallel for collapse(2) schedule(static)
-    for (int mb = 0; mb < MB; ++mb) {
-        for (int ic = 0; ic < IC; ++ic) {
-            if (diff_src_has_spatial) {
-                const int KD = conf_.KD();
-                const int KH = conf_.KH();
-                const int KW = conf_.KW();
-                for (int kd = 0; kd < KD; ++kd)
-                for (int kh = 0; kh < KH; ++kh)
-                for (int kw = 0; kw < KW; ++kw) {
-                    acc_data_t ds = acc_data_t(0);
-                    for (int oc = 0; oc < OC; ++oc) {
-                        if (is_3d)
-                            ds += (acc_data_t)(diff_dst[diff_dst_d.off(mb, oc)]
-                                * weights[weights_d.off(oc, ic, kd, kh, kw)]);
-                        else
-                            ds += (acc_data_t)(diff_dst[diff_dst_d.off(mb, oc)]
-                                * weights[weights_d.off(oc, ic, kh, kw)]);
-                    }
-                    if (is_3d) diff_src[diff_src_d.off(mb, ic, kd, kh, kw)] =
-                        (diff_src_data_t)ds;
-                    else diff_src[diff_src_d.off(mb, ic, kh, kw)] =
-                        (diff_src_data_t)ds;
-                }
-            } else {
+    parallel_nd(MB, IC, [&](int mb, int ic) {
+        if (diff_src_has_spatial) {
+            const int KD = pd()->KD();
+            const int KH = pd()->KH();
+            const int KW = pd()->KW();
+            for (int kd = 0; kd < KD; ++kd)
+            for (int kh = 0; kh < KH; ++kh)
+            for (int kw = 0; kw < KW; ++kw) {
                 acc_data_t ds = acc_data_t(0);
                 for (int oc = 0; oc < OC; ++oc) {
-                    ds += (acc_data_t)(diff_dst[diff_dst_d.off(mb, oc)] *
-                        weights[weights_d.off(oc, ic)]);
+                    switch (ndims) {
+                    case 3:
+                        ds += (acc_data_t)(diff_dst[diff_dst_d.off(mb, oc)]
+                                * weights[weights_d.off(oc, ic, kd, kh, kw)]);
+                        break;
+                    case 2:
+                        ds += (acc_data_t)(diff_dst[diff_dst_d.off(mb, oc)]
+                                * weights[weights_d.off(oc, ic, kh, kw)]);
+                        break;
+                    case 1:
+                        ds += (acc_data_t)(diff_dst[diff_dst_d.off(mb, oc)]
+                                * weights[weights_d.off(oc, ic, kw)]);
+                        break;
+                    default: assert(!"unsupported ndims size");
+                    }
                 }
-                diff_src[diff_src_d.off(mb, ic)] = (diff_src_data_t)ds;
+                switch (ndims) {
+                case 3:
+                    diff_src[diff_src_d.off(mb, ic, kd, kh, kw)]
+                            = (diff_src_data_t)ds;
+                    break;
+                case 2:
+                    diff_src[diff_src_d.off(mb, ic, kh, kw)]
+                            = (diff_src_data_t)ds;
+                    break;
+                case 1:
+                    diff_src[diff_src_d.off(mb, ic, kw)] = (diff_src_data_t)ds;
+                    break;
+                default: assert(!"unsupported ndims size");
+                }
             }
+        } else {
+            acc_data_t ds = acc_data_t(0);
+            for (int oc = 0; oc < OC; ++oc) {
+                ds += (acc_data_t)(diff_dst[diff_dst_d.off(mb, oc)] *
+                    weights[weights_d.off(oc, ic)]);
+            }
+            diff_src[diff_src_d.off(mb, ic)] = (diff_src_data_t)ds;
         }
-    }
+    });
 }
 
 template struct ref_inner_product_bwd_data_t<f32, f32, f32, f32>;
 template struct ref_inner_product_bwd_data_t<s32, s16, s16, s32>;
 
 template <impl::data_type_t data_type>
-void ref_inner_product_bwd_weights_t<data_type>::execute_backward_weights() {
+void ref_inner_product_bwd_weights_t<data_type>::execute_backward_weights() const {
     auto src = reinterpret_cast<const data_t *>(this->input_memory(0));
     auto diff_dst = reinterpret_cast<const data_t *>(this->input_memory(1));
     auto diff_weights = reinterpret_cast<data_t*>(this->memory(0));
     auto diff_bias = reinterpret_cast<data_t*>(this->memory(1));
 
-    const memory_desc_wrapper src_d(conf_.src_pd());
-    const memory_desc_wrapper diff_dst_d(conf_.diff_dst_pd());
-    const memory_desc_wrapper diff_weights_d(conf_.diff_weights_pd(0));
-    const memory_desc_wrapper diff_bias_d(conf_.diff_weights_pd(1));
+    const memory_desc_wrapper src_d(pd()->src_pd());
+    const memory_desc_wrapper diff_dst_d(pd()->diff_dst_pd());
+    const memory_desc_wrapper diff_weights_d(pd()->diff_weights_pd(0));
+    const memory_desc_wrapper diff_bias_d(pd()->diff_weights_pd(1));
 
-    diff_dst += diff_dst_d.blocking_desc().offset_padding;
+    const int MB = pd()->MB();
+    const int OC = pd()->OC();
+    const int IC = pd()->IC();
 
-    const int MB = conf_.MB();
-    const int OC = conf_.OC();
-    const int IC = conf_.IC();
+    const bool src_has_spatial = utils::one_of(src_d.ndims(), 3, 4 ,5);
+    const int ndims = src_d.ndims() - 2;
 
-    const bool src_has_spatial = utils::one_of(src_d.ndims(), 4 ,5);
-
-    const bool is_3d = src_d.ndims() == 5;
-
-#   pragma omp parallel for collapse(2) schedule(static)
-    for (int oc = 0; oc < OC; ++oc) {
-        for (int ic = 0; ic < IC; ++ic) {
-            if (src_has_spatial) {
-                const int KD = conf_.KD();
-                const int KH = conf_.KH();
-                const int KW = conf_.KW();
-                for (int kd = 0; kd < KD; ++kd) {
-                    for (int kh = 0; kh < KH; ++kh) {
-                        for (int kw = 0; kw < KW; ++kw) {
-                            data_t *dw = is_3d
-                                ? &diff_weights[
-                                diff_weights_d.off(oc, ic, kd, kh, kw)]
-                                : &diff_weights[
-                                diff_weights_d.off(oc, ic, kh, kw)];
-                            *dw = data_t(0);
-                            for (int mb = 0; mb < MB; ++mb) {
-                                if (is_3d)
-                                    *dw += diff_dst[diff_dst_d.off(mb, oc)] *
-                                        src[src_d.off(mb, ic, kd, kh, kw)];
-                                else
-                                    *dw += diff_dst[diff_dst_d.off(mb, oc)] *
-                                        src[src_d.off(mb, ic, kh, kw)];
+    parallel_nd(OC, IC, [&](int oc, int ic) {
+        if (src_has_spatial) {
+            const int KD = pd()->KD();
+            const int KH = pd()->KH();
+            const int KW = pd()->KW();
+            for (int kd = 0; kd < KD; ++kd) {
+                for (int kh = 0; kh < KH; ++kh) {
+                    for (int kw = 0; kw < KW; ++kw) {
+                        data_t *dw(nullptr);
+                        switch (ndims) {
+                        case 3:
+                            dw = &diff_weights[diff_weights_d.off(
+                                    oc, ic, kd, kh, kw)];
+                            break;
+                        case 2:
+                            dw = &diff_weights[diff_weights_d.off(
+                                    oc, ic, kh, kw)];
+                            break;
+                        case 1:
+                            dw = &diff_weights[diff_weights_d.off(oc, ic, kw)];
+                            break;
+                        default: assert(!"unsupported ndims size");
+                        }
+                        *dw = data_t(0);
+                        for (int mb = 0; mb < MB; ++mb) {
+                            switch (ndims) {
+                            case 3:
+                                *dw += diff_dst[diff_dst_d.off(mb, oc)]
+                                        * src[src_d.off(mb, ic, kd, kh, kw)];
+                                break;
+                            case 2:
+                                *dw += diff_dst[diff_dst_d.off(mb, oc)]
+                                        * src[src_d.off(mb, ic, kh, kw)];
+                                break;
+                            case 1:
+                                *dw += diff_dst[diff_dst_d.off(mb, oc)]
+                                        * src[src_d.off(mb, ic, kw)];
+                                break;
+                            default: assert(!"unsupported ndims size");
                             }
                         }
                     }
                 }
-            } else {
-                data_t *dw = &diff_weights[diff_weights_d.off(oc, ic)];
-                *dw = data_t(0);
-                for (int mb = 0; mb < MB; ++mb) {
-                    *dw += diff_dst[diff_dst_d.off(mb, oc)] *
-                        src[src_d.off(mb, ic)];
-                }
+            }
+        } else {
+            data_t *dw = &diff_weights[diff_weights_d.off(oc, ic)];
+            *dw = data_t(0);
+            for (int mb = 0; mb < MB; ++mb) {
+                *dw += diff_dst[diff_dst_d.off(mb, oc)] *
+                    src[src_d.off(mb, ic)];
             }
         }
-    }
+    });
 
     if (diff_bias) {
         diff_bias += diff_bias_d.blocking_desc().offset_padding;
-        constexpr int blksize = 8;
-        int OC_blocks = OC / blksize;
-        int rem_OC = OC % blksize;
-#       pragma omp parallel
-        {
-            const int ithr = omp_get_thread_num();
-            const int nthr = omp_get_num_threads();
-            int oc_st{0}, oc_e{0};
-            balance211(OC_blocks, nthr, ithr, oc_st, oc_e);
-            oc_st = oc_st * blksize;
-            oc_e = oc_e * blksize;
 
-            PRAGMA_OMP_SIMD()
-            for (int oc = oc_st; oc < oc_e; ++oc) {
-                diff_bias[oc] = diff_dst[oc];
-            }
-
-            for (int mb = 1; mb < MB; ++mb) {
-                PRAGMA_OMP_SIMD()
-                for (int oc = oc_st; oc < oc_e; ++oc) {
-                    diff_bias[oc] += diff_dst[mb * OC + oc];
-                }
-            }
-
-            if (rem_OC != 0 && ithr == nthr-1) {
-                for (int oc = OC_blocks * blksize; oc < OC; oc++)
-                    diff_bias[oc] = diff_dst[oc];
-                for (int mb = 1; mb < MB; ++mb) {
-                    for (int oc = OC_blocks * blksize; oc < OC; oc++) {
-                        diff_bias[oc] += diff_dst[mb * OC + oc];
-                    }
-                }
-            }
-        }
+        parallel_nd(OC, [&](int oc) {
+            data_t *db = &diff_bias[oc];
+            *db = data_t(0);
+            for (int mb = 0; mb < MB; ++mb)
+                *db += diff_dst[diff_dst_d.off(mb, oc)];
+        });
     }
 }
 

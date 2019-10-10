@@ -1,6 +1,7 @@
-# Copyright (C) 2018 Intel Corporation
+# Copyright (C) 2018-2019 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 #
+
 set(TARGET_NAME "MKLDNNPlugin")
 
 if (UNIX AND NOT APPLE)
@@ -23,13 +24,7 @@ file(GLOB HEADERS
         ${CMAKE_CURRENT_SOURCE_DIR}/nodes/*.h
 )
 
-set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse4.2")
-
 addVersionDefines(mkldnn_plugin.cpp CI_BUILD_NUMBER MKL_VERSION)
-
-if(WIN32)
-    add_definitions(-DIMPLEMENT_INFERENCE_ENGINE_PLUGIN)
-endif()
 
 include_directories(
         ${IE_MAIN_SOURCE_DIR}/include
@@ -37,20 +32,40 @@ include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/mkldnn
         ${IE_MAIN_SOURCE_DIR}/thirdparty/mkl-dnn/src/common
+        ${IE_MAIN_SOURCE_DIR}/thirdparty/mkl-dnn/src/cpu
         ${IE_MAIN_SOURCE_DIR}/thirdparty/mkl-dnn/include
+        ${CMAKE_BINARY_DIR}/include/
 )
-
-enable_omp()
 
 if (GEMM STREQUAL "MKL")
     log_rpath_from_dir(MKL "${MKL}/lib")
 endif()
 
-add_library(${TARGET_NAME} SHARED ${SOURCES} ${HEADERS})
-target_link_libraries(${TARGET_NAME} inference_engine ${INTEL_ITT_LIBS} mkldnn "${intel_omp_lib}")
-set_target_properties(${TARGET_NAME} PROPERTIES COMPILE_PDB_NAME ${TARGET_NAME})
+ie_add_plugin(NAME ${TARGET_NAME}
+              DEVICE_NAME "CPU"
+              SOURCES ${SOURCES} ${HEADERS})
+
+set_ie_threading_interface_for(${TARGET_NAME})
+
+if (THREADING STREQUAL "TBB")
+    set(MKLDNN_THR MKLDNN_THR_TBB)
+elseif (THREADING STREQUAL "TBB_AUTO")
+    set(MKLDNN_THR MKLDNN_THR_TBB_AUTO)
+elseif (THREADING STREQUAL "OMP")
+    set(MKLDNN_THR MKLDNN_THR_OMP)
+else()
+    set(MKLDNN_THR MKLDNN_THR_SEQ)
+endif()
+
+target_compile_definitions(${TARGET_NAME} PUBLIC -DMKLDNN_THR=${MKLDNN_THR})
+target_link_libraries(${TARGET_NAME} PRIVATE inference_engine ${INTEL_ITT_LIBS} mkldnn)
+
+#  add test library
 
 add_library(test_${TARGET_NAME} STATIC ${SOURCES} ${HEADERS})
+set_ie_threading_interface_for(test_${TARGET_NAME})
 
-target_link_libraries(test_${TARGET_NAME} inference_engine_s mkldnn "${intel_omp_lib}")
+target_compile_definitions(test_${TARGET_NAME} PUBLIC -DMKLDNN_THR=${MKLDNN_THR})
+target_link_libraries(test_${TARGET_NAME} PRIVATE inference_engine_s mkldnn)
+
 set_target_properties(test_${TARGET_NAME} PROPERTIES COMPILE_PDB_NAME test_${TARGET_NAME})

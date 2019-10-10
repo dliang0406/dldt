@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2016 Intel Corporation
+// Copyright (c) 2016-2018 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,28 +16,31 @@
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma once
-#include "api/CPP/convolution.hpp"
+#include "api/convolution.hpp"
 #include "primitive_inst.h"
 
 #include <memory>
+#include <string>
+#include <vector>
 
-namespace cldnn
-{
+namespace cldnn {
 
 template <>
-struct typed_program_node<convolution> : public typed_program_node_base<convolution>
-{
+struct typed_program_node<convolution> : public typed_program_node_base<convolution> {
     using parent = typed_program_node_base<convolution>;
 
 public:
     typed_program_node(std::shared_ptr<primitive> prim, program_impl& prog)
-        : parent(prim, prog)
-        , split(this->get_primitive()->split())
-        , depthwise_sep_opt(false)
-        , transposed(false)
-        , input_qf(this->get_primitive()->input_quantization_factor)
-        , output_qf(this->get_primitive()->output_quantization_factor)
-    {
+        : parent(prim, prog),
+          split(this->get_primitive()->split()),
+          depthwise_sep_opt(false),
+          transposed(false),
+          input_qf(this->get_primitive()->input_quantization_factor),
+          output_qf(this->get_primitive()->output_quantization_factor),
+          groups(this->get_primitive()->groups),
+          deformable_groups(this->get_primitive()->deformable_groups),
+          deformable_mode(this->get_primitive()->deformable_mode) {
+        support_padding_all(true);
     }
 
     void set_split(int32_t node_split) { split = node_split; }
@@ -49,55 +52,58 @@ public:
     void set_transposed(bool node_transposed) { transposed = node_transposed; }
     bool get_transposed() const { return transposed; }
 
-    decltype(auto) input() const { return get_dependency(0); }
+    void set_groups(uint32_t node_groups) { groups = node_groups; }
+    uint32_t get_groups() const { return groups; }
 
-    decltype(auto) weights(size_t idx = 0) const
-    {
+    void set_deformable_groups(uint32_t node_deformable_groups) { deformable_groups = node_deformable_groups; }
+    uint32_t get_deformable_groups() const { return deformable_groups; }
+
+    int32_t get_trans_dep_offset() const { return deformable_mode ? 1 : 0; }
+
+    program_node& input() const { return get_dependency(0); }
+
+    program_node& weights(size_t idx = 0) const {
         if (static_cast<int32_t>(idx) >= this->get_split())
             throw std::range_error("weights offset too big");
 
-        return get_dependency(1 + idx);
+        return get_dependency(1 + idx + get_trans_dep_offset());
     }
 
-    decltype(auto) bias(size_t idx = 0) const
-    { 
+    program_node& bias(size_t idx = 0) const {
         if (static_cast<int32_t>(idx) >= this->get_split())
             throw std::range_error("bias offset too big");
 
-        return get_dependency(1 + this->get_split() + idx);
+        return get_dependency(1 + this->get_split() + idx + get_trans_dep_offset());
     }
 
-    decltype(auto) weights_quantization_factors(size_t idx = 0) const
-    {
+    program_node& weights_quantization_factors(size_t idx = 0) const {
         if (static_cast<int32_t>(idx) >= this->get_split())
             throw std::range_error("quantization factor offset too big");
 
-        return get_dependency(1 + 2*this->get_split() + idx);
+        return get_dependency(1 + (1 + 1 * bias_term()) * this->get_split() + idx + get_trans_dep_offset());
     }
 
-    decltype(auto) output_calibration_factors(size_t idx = 0) const
-    {
+    program_node& trans() const {
+        if (!deformable_mode)
+            throw std::range_error("trans input exists only in deformable mode");
+
+        return get_dependency(1);
+    }
+
+    program_node& output_calibration_factors(size_t idx = 0) const {
         if (static_cast<int32_t>(idx) >= this->get_split())
             throw std::range_error("calibration factor offset too big");
 
-        return get_dependency(1 + 3 * this->get_split() + idx);
+        return get_dependency(1 + (1 + 1 * bias_term() + 1 * weights_quantization_term()) * this->get_split() + idx +
+                              get_trans_dep_offset());
     }
 
-    bool bias_term() const
-    {
-        return get_primitive()->bias.size() > 0;
-    }
+    bool bias_term() const { return get_primitive()->bias.size() > 0; }
 
-    bool weights_quantization_term() const
-    {
-        return get_primitive()->weights_quantization_factors.size() > 0;
-    }
+    bool weights_quantization_term() const { return get_primitive()->weights_quantization_factors.size() > 0; }
 
-    bool output_calibration_term() const
-    {
-        return get_primitive()->output_calibration_factors.size() > 0;
-    }
-    
+    bool output_calibration_term() const { return get_primitive()->output_calibration_factors.size() > 0; }
+
     float get_input_qf() const { return input_qf; }
     float get_output_qf() const { return output_qf; }
 
@@ -107,13 +113,15 @@ private:
     bool transposed;
     float input_qf;
     float output_qf;
+    uint32_t groups;
+    uint32_t deformable_groups;
+    bool deformable_mode;
 };
 
 using convolution_node = typed_program_node<convolution>;
 
 template <>
-class typed_primitive_inst<convolution> : public typed_primitive_inst_base<convolution>
-{
+class typed_primitive_inst<convolution> : public typed_primitive_inst_base<convolution> {
     using parent = typed_primitive_inst_base<convolution>;
 
 public:
@@ -123,54 +131,61 @@ public:
 public:
     typed_primitive_inst(network_impl& network, convolution_node const& node);
 
-    decltype(auto)weights_memory(size_t index) const
-    {
-        if (static_cast<int32_t>(index) >= node.get_split())
-            throw std::range_error("weights offset too big");
-        
-        return dep_memory(1 + index);
+    memory_impl& weights_memory(size_t index) const {
+        if (node.get_groups() == 1) {
+            if (static_cast<int32_t>(index) >= node.get_split())
+                throw std::range_error("weights offset too big");
+            return dep_memory(1 + index + node.get_trans_dep_offset());
+        } else {  // all weights are in one buffer
+            return dep_memory(1 + node.get_trans_dep_offset());
+        }
     }
 
-    decltype(auto) bias_memory(size_t index) const
-    { 
-        if (static_cast<int32_t>(index) >= node.get_split())
-            throw std::range_error("bias offset too big");
-
-        return dep_memory(1 + node.get_split() + index);
+    memory_impl& bias_memory(size_t index) const {
+        if (node.get_groups() == 1) {
+            if (static_cast<int32_t>(index) >= node.get_split())
+                throw std::range_error("bias offset too big");
+            return dep_memory(1 + node.get_split() + index + node.get_trans_dep_offset());
+        } else {  // all bias are in one buffer
+            return dep_memory(2 + node.get_trans_dep_offset());
+        }
     }
 
-    decltype(auto) weights_quantization_factors_memory(size_t index) const
-    {
-        if (static_cast<int32_t>(index) >= node.get_split())
-            throw std::range_error("quantization factors offset too big");
-
-        return dep_memory(1 + 2*node.get_split() + index);
+    memory_impl& weights_quantization_factors_memory(size_t index) const {
+        if (node.get_groups() == 1) {
+            if (static_cast<int32_t>(index) >= node.get_split())
+                throw std::range_error("quantization factors offset too big");
+            return dep_memory(1 + (1 + 1 * bias_term()) * node.get_split() + index + node.get_trans_dep_offset());
+        } else {  // all quantization_factors are in one buffer
+            return dep_memory(2 + 1 * bias_term() + node.get_trans_dep_offset());
+        }
     }
 
-    decltype(auto) output_calibration_factors_memory(size_t index) const
-    {
-        if (static_cast<int32_t>(index) >= node.get_split())
-            throw std::range_error("quantization factors offset too big");
-
-        return dep_memory(1 + 3 * node.get_split() + index);
+    memory_impl& trans_memory() const {
+        if (!node.get_trans_dep_offset())
+            throw std::range_error("trans input exists only in deformable mode");
+        return dep_memory(1);
     }
 
-    bool bias_term() const
-    {
-        return node.bias_term();
+    memory_impl& output_calibration_factors_memory(size_t index) const {
+        if (node.get_groups() == 1) {
+            if (static_cast<int32_t>(index) >= node.get_split())
+                throw std::range_error("quantization factors offset too big");
+            return dep_memory(1 + (1 + 1 * bias_term() + 1 * weights_quantization_factors_term()) * node.get_split() +
+                              index + node.get_trans_dep_offset());
+        } else {  // all calibration_factors are in one buffer
+            return dep_memory(2 + 1 * bias_term() + 1 * weights_quantization_factors_term() +
+                              node.get_trans_dep_offset());
+        }
     }
 
-    bool weights_quantization_factors_term() const
-    {
-        return node.weights_quantization_term();
-    }
+    bool bias_term() const { return node.bias_term(); }
 
-    bool output_calibration_factors_term() const
-    {
-        return node.output_calibration_term();
-    }
+    bool weights_quantization_factors_term() const { return node.weights_quantization_term(); }
+
+    bool output_calibration_factors_term() const { return node.output_calibration_term(); }
 };
 
 using convolution_inst = typed_primitive_inst<convolution>;
 
-}
+}  // namespace cldnn

@@ -15,9 +15,12 @@
 
 #include "include/include_all.cl"
 
-// tempGEMM = [ 1, direction, batch, 4 * hidden_size ]
-// cell     = [ 1, direction, batch,     hidden_size ] optional
-// output   = [ 2, direction, batch,     hidden_size ] output
+#define ACTIVATION_LOGISTIC(input)                      (UNIT_VAL_ONE/(UNIT_VAL_ONE + exp(-input)))
+#define ACTIVATION_HYPERBOLIC_TAN(input)                (tanh(input))
+
+// tempGEMM = [ batch, 1, direction, 4 * hidden_size ]
+// cell     = [ batch, 1, direction, hidden_size ] optional
+// output   = [ batch, 1, direction, hidden_size ] output
 KERNEL(lstm_elt)(
     const __global INPUT0_TYPE* input,
     __global OUTPUT_TYPE* output
@@ -44,9 +47,9 @@ KERNEL(lstm_elt)(
 #endif
 
 #if CELL_TERM
-    val += cell[GET_DATA_INDEX(CELL, b, 0, 0, x)] * ACTIVATION_LOGISTIC(CLIP(ft));
+    val += cell[GET_DATA_INDEX(CELL, b, 0, CELL_DIRECTION, x)] * ACTIVATION_LOGISTIC(CLIP(ft));
 #endif
 
-    output[GET_DATA_INDEX(OUTPUT, b, 0, 0, x)] = ACTIVATION_HYPERBOLIC_TAN(val) * ACTIVATION_LOGISTIC(ot); // hidden
+    output[GET_DATA_INDEX(OUTPUT, b, 0, 0, x)] = (OUTPUT_TYPE)(ACTIVATION_HYPERBOLIC_TAN(val) * ACTIVATION_LOGISTIC(ot)); // hidden
     output[GET_DATA_INDEX(OUTPUT, b, 1, 0, x)] = (OUTPUT_TYPE)val; // cell
 }

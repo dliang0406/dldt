@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -90,7 +89,7 @@ class CNNNetworkIterator {
      */
     const CNNLayerPtr &operator*() const {
         if (nullptr == currentLayer) {
-            THROW_IE_EXCEPTION << "iterator of ouf bound";
+            THROW_IE_EXCEPTION << "iterator out of bound";
         }
         return currentLayer;
     }

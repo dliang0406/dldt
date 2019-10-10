@@ -1,10 +1,8 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include "hetero_async_infer_request.h"
-#include <assert.h>
+#include "hetero_async_infer_request.hpp"
 #include <ie_util_internal.hpp>
 #include <ie_profiling.hpp>
 
@@ -29,7 +27,8 @@ HeteroAsyncInferRequest::HeteroAsyncInferRequest(HeteroInferRequest::Ptr request
 
 void HeteroAsyncInferRequest::StartAsync() {
     IE_PROFILING_AUTO_SCOPE(Hetero_Async)
-    if (isRequestBusy()) THROW_IE_EXCEPTION << REQUEST_BUSY_str;
+    if (isRequestBusy())
+        THROW_IE_EXCEPTION << InferenceEngine::details::as_status << StatusCode::REQUEST_BUSY << REQUEST_BUSY_str;
     setIsRequestBusy(true);
     _heteroInferRequest->updateInOutIfNeeded();
     _heteroInferRequest->startFirstAsyncRequest();

@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -15,7 +14,7 @@ namespace MKLDNNPlugin {
 
 class MKLDNNReorderNode : public MKLDNNNode {
 public:
-    MKLDNNReorderNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng);
+    MKLDNNReorderNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket);
     ~MKLDNNReorderNode() override = default;
 
     void getSupportedDescriptors() override;
@@ -36,6 +35,14 @@ public:
         return false;
     }
 
+    const InferenceEngine::TensorDesc& getInput() { return input; }
+    const InferenceEngine::TensorDesc& getOutput() { return output; }
+
+    /**
+     * @brief A pointer to a scales blob
+     */
+    InferenceEngine::Blob::Ptr _scales;
+
 private:
     static Register<MKLDNNReorderNode> reg;
     InferenceEngine::TensorDesc input;
@@ -43,6 +50,8 @@ private:
 
     MKLDNNMemoryPtr dst_blocked;
     MKLDNNMemoryPtr src_blocked;
+
+    void createReorderPrimitive(const mkldnn::memory::desc &srcDesc, void* srcPtr, const mkldnn::memory::desc &dstDesc, void* dstPtr);
 };
 
 }  // namespace MKLDNNPlugin

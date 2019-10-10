@@ -46,11 +46,15 @@ struct memory_desc_wrapper: public c_compatible {
     memory_format_t format() const { return _md->format; }
     bool is_blocking_desc() const {
         return (format() != memory_format::wino_fmt
+                && format() != memory_format::rnn_packed
                 && format() != memory_format::any
                 && format() != memory_format::undef);
     }
     bool is_wino_desc() const {
         return (format() == memory_format::wino_fmt);
+    }
+    bool is_rnn_packed_desc() const {
+        return (format() == memory_format::rnn_packed);
     }
     const blocking_desc_t &blocking_desc() const {
         assert(is_blocking_desc());
@@ -60,6 +64,10 @@ struct memory_desc_wrapper: public c_compatible {
         assert(is_wino_desc());
         return _md->layout_desc.wino_desc;
     }
+    const rnn_packed_data_t &rnn_packed_desc() const {
+        assert(is_rnn_packed_desc());
+        return _md->layout_desc.rnn_packed_desc;
+    }
 
     /* some useful function */
 
@@ -67,36 +75,86 @@ struct memory_desc_wrapper: public c_compatible {
      * is true, and the number of data elements otherwise */
     size_t nelems(bool with_padding = false) const {
         if (is_zero()) return 0;
-    return utils::array_product<int, size_t>(with_padding
-                ? blocking_desc().padding_dims : dims(), ndims());
+        return (utils::array_product<ptrdiff_t, size_t>(with_padding
+                ? blocking_desc().padding_dims : dims(), ndims()));
     }
 
     /** returns true if memory descriptor is zero */
     bool is_zero() const { return ndims() == 0; }
 
+    /** returns true if memory descriptor contains zero as one of its dim */
+    bool has_zero_dim() const { return nelems() == 0; }
+
     /** return the size of data type (a shortcut) */
     size_t data_type_size() const
     { return types::data_type_size(data_type()); }
+
+    /** return the size of data type of additional buffer */
+    size_t additional_buffer_data_size() const {
+        using namespace mkldnn::impl::memory_format;
+        return (utils::one_of(format(),
+                hwio_s8s8, hwigo_s8s8, gOIhw4o4i_s8s8,
+                gOIw4i16o4i_s8s8, OIw4i16o4i_s8s8, gOIhw4i16o4i_s8s8,
+                OIhw4i16o4i_s8s8, gOIhw2i8o4i_s8s8, Goiw16g_s8s8,
+                gOhIw8o4i_s8s8, OhIw8o4i_s8s8,
+                Goihw16g_s8s8))
+            ? sizeof(int32_t) : 0;
+    }
+
+    /** return true if memory format has additional buffer */
+    bool is_additional_buffer() const {
+        using namespace mkldnn::impl::memory_format;
+        return (utils::one_of(format(),
+                hwio_s8s8, hwigo_s8s8, gOIhw4o4i_s8s8, gOIw4i16o4i_s8s8,
+                OIw4i16o4i_s8s8, gOIhw4i16o4i_s8s8, OIhw4i16o4i_s8s8,
+                gOIhw2i8o4i_s8s8, gOhIw8o4i_s8s8, OhIw8o4i_s8s8,
+                Goiw16g_s8s8, Goihw16g_s8s8))
+            ? true : false;
+    }
+
+    /** returns the size of additional buffer */
+    size_t additional_buffer_size() const {
+        using namespace mkldnn::impl::memory_format;
+        const auto &padding_dims = blocking_desc().padding_dims;
+        switch(format()) {
+            case hwigo_s8s8:
+            case Goiw16g_s8s8:
+            case Goihw16g_s8s8:
+            case gOIhw4o4i_s8s8:
+            case gOIhw2i8o4i_s8s8:
+            case gOIw4i16o4i_s8s8:
+            case gOIhw4i16o4i_s8s8:
+            case gOhIw8o4i_s8s8:
+                return size_t(padding_dims[0]) * size_t(padding_dims[1])
+                    * additional_buffer_data_size();
+            case hwio_s8s8:
+            case OIw4i16o4i_s8s8:
+            case OIhw4i16o4i_s8s8:
+            case OhIw8o4i_s8s8:
+                return size_t(padding_dims[0]) * additional_buffer_data_size();
+            default:
+                return 0;
+        }
+    }
 
     /** returns the size required to store described memory
      * note: if offset_padding != 0 returns 0 (need to specify the behavior) */
     size_t size() const {
         using namespace mkldnn::impl::memory_format;
-        if (is_zero() || format() == memory_format::any) return 0;
+        if (is_zero() || has_zero_dim() || format() == memory_format::any)
+            return 0;
 
-        assert(utils::one_of(format(), blocked, x, nc, nchw, nhwc, chwn,
-                    nChw8c, nChw16c, oi, io, oihw, ihwo, hwio, hwigo, oIhw8i,
-                    oIhw16i, OIhw8i8o, OIhw16i16o, OIhw8i16o2i, OIhw8o16i2o,
-                    OIhw8o8i, OIhw16o16i, Oihw16o, Ohwi8o, Ohwi16o,
-                    OIhw4i16o4i, goihw, gOIhw8i8o, gOIhw16i16o, gOIhw8i16o2i,
-                    gOIhw8o16i2o, gOIhw8o8i, gOIhw16o16i, gOihw16o, gOhwi8o,
-                    gOhwi16o, IOhw16o16i, gIOhw16o16i, gOIhw4i16o4i, Goihw8g,
-                    Goihw16g, ncdhw, oidhw, goidhw, nCdhw16c, OIdhw16i16o,
-                    gOIdhw16i16o, OIdhw16o16i, gOIdhw16o16i, ndhwc, gOidhw16o,
-                    Oidhw16o, gOdhwi16o, Odhwi16o, ntc, tnc, ldsnc, ldigo,
-                    ldgoi, ldgo, wino_fmt, dhwio, OIdhw8i16o2i, gOIdhw8i16o2i));
+        assert((false
+                    || types::format_normalize(format()) == blocked
+                    || types::is_format_double_blocked(format())
+                    || format() == wino_fmt
+                    || format() == rnn_packed)
+                && "unknown format");
+
         if (format() == wino_fmt) {
             return wino_desc().size;
+        } else if (format() == rnn_packed) {
+            return rnn_packed_desc().size;
         } else {
             if (blocking_desc().offset_padding != 0) return 0;
 
@@ -108,11 +166,13 @@ struct memory_desc_wrapper: public c_compatible {
             for (int d = 0; d < ndims(); ++d) {
                 auto block = block_dims[d];
                 max_size = nstl::max(max_size,
-                    size_t(padding_dims[d] / block)*strides[0][d]);
+                    size_t(padding_dims[d] / block) * strides[0][d]);
                 if (block > 1)
-                    max_size = nstl::max(max_size, size_t(block*strides[1][d]));
+                    max_size = nstl::max(max_size,
+                            size_t(block * strides[1][d]));
             }
-            return max_size * data_type_size();
+
+            return max_size * data_type_size() + additional_buffer_size();
         }
     }
 
@@ -130,6 +190,13 @@ struct memory_desc_wrapper: public c_compatible {
             if (d != dim && dims()[d] != pdims[d])
                 return false;
         return true;
+    }
+
+    /** returns true if memory desc has blocked layout and block dims are 1s */
+    bool is_plain() const {
+        if (!is_blocking_desc()) return false;
+        return
+            utils::array_product(blocking_desc().block_dims, ndims()) == 1;
     }
 
     /* comparison section */
@@ -180,30 +247,44 @@ struct memory_desc_wrapper: public c_compatible {
             phys_offset += pos_block * blk.strides[0][d];
             phys_offset += pos_within_block * blk.strides[1][d];
         }
-        if (format() == gOIhw4i16o4i || format() == OIhw4i16o4i) {
+        if (utils::one_of(format(), gOIw4i16o4i, OIw4i16o4i, gOIw4i16o4i_s8s8,
+                    OIw4i16o4i_s8s8, gOIhw4i16o4i, OIhw4i16o4i,
+                    gOIhw4i16o4i_s8s8, OIhw4i16o4i_s8s8)) {
             // TODO: Fix temporary workaround for formats with double blocking
-            const bool with_groups = format() == gOIhw4i16o4i;
+            const bool with_groups = utils::one_of(format(), gOIw4i16o4i,
+                    gOIw4i16o4i_s8s8, gOIhw4i16o4i, gOIhw4i16o4i_s8s8);
             const int oc_16 = pos[with_groups + 0] % 16;
-            const int ic_4  = pos[with_groups + 1] % 4;
+            const int ic_4 = pos[with_groups + 1] % 4;
             phys_offset += 4 * oc_16 + ic_4 - (oc_16 + 16 * ic_4);
         }
-        if (format() == gOIhw8i16o2i || format() == OIhw8i16o2i) {
+        if (utils::one_of(format(), gOIhw2i8o4i,  gOIhw2i8o4i_s8s8)) {
             // TODO: Fix temporary workaround for formats with double blocking
-            const bool with_groups = format() == gOIhw8i16o2i;
+            const bool with_groups = true;
+            const int oc_8 = pos[with_groups + 0] % 8;
+            const int ic_4 = pos[with_groups + 1] % 4;
+            phys_offset += 4 * oc_8 + ic_4 - (oc_8 + 8 * ic_4);
+        }
+        if (utils::one_of(format(), gOIw8i16o2i, gOIhw8i16o2i, gOIdhw8i16o2i,
+                                   OIw8i16o2i, OIhw8i16o2i, OIdhw8i16o2i,
+                                   IOhw8i16o2i, gIOhw8i16o2i)) {
+            // TODO: Fix temporary workaround for formats with double blocking
+            const bool with_groups = utils::one_of(format(), gOIw8i16o2i,
+                                                   gOIhw8i16o2i, gOIdhw8i16o2i,
+                                                   gIOhw8i16o2i);
             const int oc_16 = pos[with_groups + 0] % 16;
             const int ic_2  = pos[with_groups + 1] % 2;
             phys_offset += -16 * ic_2 + oc_16 + ic_2;
         }
-        if (format() == gOIdhw8i16o2i || format() == OIdhw8i16o2i) {
+        if (utils::one_of(format(), gOIw8o16i2o, gOIhw8o16i2o, gOIdhw8o16i2o,
+                                    gIOw8o16i2o, gIOhw8o16i2o, gIOdhw8o16i2o,
+                                    OIw8o16i2o, OIhw8o16i2o, OIdhw8o16i2o,
+                                    IOw8o16i2o, IOhw8o16i2o, IOdhw8o16i2o)) {
+
             // TODO: Fix temporary workaround for formats with double blocking
-            const bool with_groups = format() == gOIdhw8i16o2i;
-            const int oc_16 = pos[with_groups + 0] % 16;
-            const int ic_2  = pos[with_groups + 1] % 2;
-            phys_offset += -16 * ic_2 + oc_16 + ic_2;
-        }
-        if (format() == gOIhw8o16i2o || format() == OIhw8o16i2o) {
-            // TODO: Fix temporary workaround for formats with double blocking
-            const bool with_groups = format() == gOIhw8o16i2o;
+            const bool with_groups = utils::one_of(format(),
+                                                   gOIw8o16i2o, gOIhw8o16i2o,
+                                                   gOIdhw8o16i2o, gIOw8o16i2o,
+                                                   gIOhw8o16i2o, gIOdhw8o16i2o);
             const int ic_16 = pos[with_groups + 1] % 16;
             const int oc_2  = pos[with_groups + 0] % 2;
             phys_offset += -16 * oc_2 + ic_16 + oc_2;
@@ -303,12 +384,19 @@ inline bool memory_desc_wrapper::operator==(const memory_desc_wrapper &rhs)
     return ndims() == rhs.ndims()
             && utils::array_cmp(dims(), rhs.dims(), ndims())
             && data_type() == rhs.data_type()
-            && (is_blocking_desc()
-                ? blocking_desc_is_equal(
-                    blocking_desc(), rhs.blocking_desc(), ndims())
-                : true)
-            && (is_wino_desc()
-                ? wino_desc_is_equal(wino_desc(), rhs.wino_desc()) : true);
+            && ((is_blocking_desc() && rhs.is_blocking_desc())
+                       || (is_wino_desc() && rhs.is_wino_desc())
+                       || (is_rnn_packed_desc() && rhs.is_rnn_packed_desc()))
+            && (is_blocking_desc() ? blocking_desc_is_equal(blocking_desc(),
+                                             rhs.blocking_desc(), ndims()) :
+                                     true)
+            && (is_wino_desc() ? wino_desc_is_equal(
+                                         wino_desc(), rhs.wino_desc()) :
+                                 true)
+            && (is_rnn_packed_desc() ?
+                               rnn_packed_desc_is_equal(rnn_packed_desc(),
+                                       rhs.rnn_packed_desc()) :
+                               true);
 }
 
 inline bool memory_desc_wrapper::similar_to(const memory_desc_wrapper &rhs,
@@ -317,7 +405,8 @@ inline bool memory_desc_wrapper::similar_to(const memory_desc_wrapper &rhs,
     using namespace utils;
     if (utils::one_of(format(), memory_format::undef, memory_format::any))
         return false;
-    if (is_wino_desc() || rhs.is_wino_desc())
+    if (is_wino_desc() || rhs.is_wino_desc() || is_rnn_packed_desc()
+            || rhs.is_rnn_packed_desc())
         return false;
 
     const int ds = dim_start;
@@ -328,11 +417,11 @@ inline bool memory_desc_wrapper::similar_to(const memory_desc_wrapper &rhs,
         && dim_start <= ndims() /* guard */
         && array_cmp(dims() + ds, rhs.dims() + ds, ndims() - ds)
         && format_normalize(format()) == format_normalize(rhs.format())
-        && implication(with_data_type, data_type() == rhs.data_type())
+        && IMPLICATION(with_data_type, data_type() == rhs.data_type())
         && array_cmp(blk.block_dims + ds, r_blk.block_dims + ds, ndims() - ds)
         && array_cmp(blk.strides[0] + ds, r_blk.strides[0] + ds, ndims() - ds)
         && array_cmp(blk.strides[1] + ds, r_blk.strides[1] + ds, ndims() - ds)
-        && implication(with_padding,
+        && IMPLICATION(with_padding,
                 array_cmp(blk.padding_dims + ds, r_blk.padding_dims + ds,
                     ndims() - ds)
                 && array_cmp(blk.offset_padding_to_data + ds,

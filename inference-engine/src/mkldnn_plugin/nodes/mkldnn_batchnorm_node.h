@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -15,7 +14,7 @@ namespace MKLDNNPlugin {
 
 class MKLDNNBatchNormalizationNode : public MKLDNNNode {
 public:
-    MKLDNNBatchNormalizationNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng);
+    MKLDNNBatchNormalizationNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket);
 
     ~MKLDNNBatchNormalizationNode() override = default;
     void initSupportedPrimitiveDescriptors() override;

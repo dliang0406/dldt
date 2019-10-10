@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -26,7 +25,6 @@
 #include "ie_algorithm.hpp"
 
 #ifdef _WIN32
-#include <winsock2.h>
 #include <windows.h>
 
 #define POSIX_EPOCH_AS_FILETIME 116444736000000000ULL
@@ -86,7 +84,9 @@ inline std::ostream & operator << (std::ostream &out, const std::vector<T> &vec)
  * @param s - string to trim
  */
 inline void ltrim(std::string &s) {
-    s.erase(s.begin(), std::find_if(s.begin(), s.end(), std::not1(std::ptr_fun<int, int>(std::isspace))));
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](int c){
+        return !std::isspace(c);
+    }));
 }
 
 /**
@@ -94,7 +94,9 @@ inline void ltrim(std::string &s) {
  * @param s - string to trim
  */
 inline void rtrim(std::string &s) {
-    s.erase(std::find_if(s.rbegin(), s.rend(), std::not1(std::ptr_fun<int, int>(std::isspace))).base(), s.end());
+    s.erase(std::find_if(s.rbegin(), s.rend(), [](int c) {
+        return !std::isspace(c);
+    }).base(), s.end());
 }
 
 /**
@@ -206,22 +208,6 @@ inline std::string tolower(const std::string &s) {
     ret.resize(s.length());
     std::transform(s.begin(), s.end(), ret.begin(), ::tolower);
     return ret;
-}
-
-/**
- * @brief Wierd function to perform string formatting
- * @param msg - base format
- * @param ... - arguments for formatting
- * @return formatted string
- */
-static inline std::string stringFormat(const char *msg, ...) {
-    va_list va;
-    va_start(va, msg);
-    char buffer[65536];
-
-    vsnprintf_s(buffer, 65535, msg, va);
-    va_end(va);
-    return buffer;
 }
 }  // namespace details
 }  // namespace InferenceEngine

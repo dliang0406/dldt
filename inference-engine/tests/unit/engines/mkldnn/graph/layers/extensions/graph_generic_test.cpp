@@ -1,16 +1,13 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include <gtest/gtest.h>
 #include <gmock/gmock-spec-builders.h>
 #include "mkldnn_plugin/mkldnn_graph.h"
-#include "mock_mkldnn_primitive.hpp"
 
 #include "test_graph.hpp"
 
-#include <mock_mkldnn_extension.hpp>
 #include <ie_iextension.h>
 #include <ie_plugin_config.hpp>
 #include <mock_error_listener.hpp>
@@ -154,7 +151,7 @@ public:
 
         size_t data_size = outputs[0]->size();
         for (size_t i = 0; i < data_size; i++) {
-            dst_data[i] = (dst_data[i] + 1)*2;
+            dst_data[i] = 2;
         }
         return InferenceEngine::OK;
     }
@@ -525,7 +522,6 @@ void ref_double(const InferenceEngine::TBlob<data_t> &src, InferenceEngine::TBlo
     const data_t *src_data = src.readOnly();
     data_t *dst_data = dst.data();
 
-#pragma omp parallel for
     for (int i=0; i < src.size(); i++)
         dst_data[i] = src_data[i]*2;
 }
@@ -535,10 +531,9 @@ void ref_double_batch1(const InferenceEngine::TBlob<data_t> &src, InferenceEngin
     const data_t *src_data = src.readOnly();
     data_t *dst_data = dst.data();
 
-#pragma omp parallel for
     for (int i= 0; i < src.size() / 2; i++)
         dst_data[i] = src_data[i]*2;
-#pragma omp parallel for
+
     for (int i= src.size() / 2; i < src.size(); i++)
         dst_data[i] = 0;
 }
@@ -549,11 +544,9 @@ void ref_twoDifferent(const InferenceEngine::TBlob<data_t> &src, InferenceEngine
     data_t *dst_data1 = dst1.data();
     data_t *dst_data2 = dst2.data();
 
-#pragma omp parallel for
     for (int i=0; i < dst1.size(); i++)
         dst_data1[i] = (*(src_data++))*2;
 
-#pragma omp parallel for
     for (int i=0; i < dst2.size(); i++)
         dst_data2[i] = (*(src_data++))*6;
 }
@@ -656,7 +649,7 @@ TEST_F(MKLDNNGraphGenericTests, ExecuteConstGenericPrimitive) {
     InferenceEngine::SizeVector dims_src = {1, 3, 5, 5};
 
     InferenceEngine::Blob::Ptr src =
-            InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src);
+            InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src, InferenceEngine::NCHW});
     src->allocate();
     fill_data(src->buffer(), src->size());
 
@@ -743,7 +736,7 @@ TEST_F(MKLDNNGraphGenericTests, ExecuteGenericPrimitive) {
     InferenceEngine::SizeVector dims_src = {1, 3, 5, 5};
 
     InferenceEngine::Blob::Ptr src =
-           InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src);
+           InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src, InferenceEngine::NCHW});
     src->allocate();
     fill_data(src->buffer(), src->size());
 
@@ -879,7 +872,7 @@ TEST_F(MKLDNNGraphGenericTests, ExecuteGenericPrimitiveWithTwoOutputs) {
     InferenceEngine::SizeVector dims_src = {1, 3, 5, 5};
 
     InferenceEngine::Blob::Ptr src =
-            InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src);
+            InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src, InferenceEngine::NCHW});
     src->allocate();
 
     float * data_src = src->buffer();
@@ -988,7 +981,7 @@ TEST_F(MKLDNNGraphGenericTests, ExecuteGenericInPlaceConcat) {
     InferenceEngine::SizeVector dims_src1 = {1, 3, 5, 5};
 
     InferenceEngine::Blob::Ptr src1 =
-            InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src1);
+            InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src1, InferenceEngine::NCHW});
     src1->allocate();
 
     float * data_src1 = src1->buffer();
@@ -998,7 +991,7 @@ TEST_F(MKLDNNGraphGenericTests, ExecuteGenericInPlaceConcat) {
     InferenceEngine::SizeVector dims_src2 = {1, 2, 5, 5};
 
     InferenceEngine::Blob::Ptr src2 =
-            InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src2);
+            InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src2, InferenceEngine::NCHW});
     src2->allocate();
 
     float * data_src2 = src2->buffer();
@@ -1132,7 +1125,7 @@ TEST_F(MKLDNNGraphGenericTests, ExecuteGenericInPlaceSplit) {
     InferenceEngine::SizeVector dims_src = {1, 4, 4, 4};
 
     InferenceEngine::Blob::Ptr src =
-            InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src);
+            InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src, InferenceEngine::NCHW});
     src->allocate();
 
     float * data_src = src->buffer();
@@ -1228,11 +1221,11 @@ TEST_F(MKLDNNGraphGenericTests, ExecuteGenericPrimitiveWithDynamicBatch) {
     InferenceEngine::SizeVector dims_src = {2, 3, 5, 5};
 
     InferenceEngine::Blob::Ptr src =
-            InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src);
+            InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src, InferenceEngine::NCHW});
     src->allocate();
     fill_data(src->buffer(), src->size());
 
-    InferenceEngine::TBlob<float>* srcPtr = dynamic_cast<InferenceEngine::TBlob<float>*>(src.get());
+    auto* srcPtr = dynamic_cast<InferenceEngine::TBlob<float>*>(src.get());
 
     if (srcPtr == nullptr)
         FAIL() << "Cannot cast blob to TBlob<float>.";
@@ -1367,9 +1360,10 @@ TEST_F(MKLDNNGraphGenericTests, ExecuteNotInLineGRN) {
         <edge from-layer="2" from-port="4" to-layer="3" to-port="6"/>
     </edges>
 </net>)V0G0N";
-    std::shared_ptr<InferenceEngine::IExtension> cpuExt(new InferenceEngine::Extensions::Cpu::CpuExtensions());
+    InferenceEngine::Extension cpuExt(make_so_name("cpu_extension"));
     MKLDNNPlugin::MKLDNNExtensionManager::Ptr extMgr(new MKLDNNPlugin::MKLDNNExtensionManager());
-    extMgr->AddExtension(cpuExt);
+
+    extMgr->AddExtension(InferenceEngine::IExtensionPtr(&cpuExt, [](InferenceEngine::IExtension*){}));
 
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
@@ -1380,11 +1374,11 @@ TEST_F(MKLDNNGraphGenericTests, ExecuteNotInLineGRN) {
     InferenceEngine::SizeVector dims_src = {1, 3, 2, 2};
 
     InferenceEngine::Blob::Ptr src =
-            InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src);
+            InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src, InferenceEngine::NCHW});
     src->allocate();
     fill_data(src->buffer(), src->size());
 
-    InferenceEngine::TBlob<float>* srcPtr = dynamic_cast<InferenceEngine::TBlob<float>*>(src.get());
+    auto* srcPtr = dynamic_cast<InferenceEngine::TBlob<float>*>(src.get());
 
     if (srcPtr == nullptr)
         FAIL() << "Cannot cast blob to TBlob<float>.";
@@ -1509,9 +1503,10 @@ TEST_F(MKLDNNGraphGenericTests, ExecuteInLineGRN) {
         <edge from-layer="3" from-port="4" to-layer="4" to-port="6"/>
     </edges>
 </net>)V0G0N";
-    std::shared_ptr<InferenceEngine::IExtension> cpuExt(new InferenceEngine::Extensions::Cpu::CpuExtensions());
+
+    InferenceEngine::Extension cpuExt(make_so_name("cpu_extension"));
     MKLDNNPlugin::MKLDNNExtensionManager::Ptr extMgr(new MKLDNNPlugin::MKLDNNExtensionManager());
-    extMgr->AddExtension(cpuExt);
+    extMgr->AddExtension(InferenceEngine::IExtensionPtr(&cpuExt, [](InferenceEngine::IExtension*){}));
 
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
@@ -1522,12 +1517,12 @@ TEST_F(MKLDNNGraphGenericTests, ExecuteInLineGRN) {
     InferenceEngine::SizeVector dims_src = {1, 3, 2, 2};
 
     InferenceEngine::Blob::Ptr src1 =
-            InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src);
+            InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src, InferenceEngine::NCHW});
     src1->allocate();
     fill_data(src1->buffer(), src1->size());
 
     InferenceEngine::Blob::Ptr src2 =
-            InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src);
+            InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src, InferenceEngine::NCHW});
     src2->allocate();
     fill_data(src2->buffer(), src2->size());
 

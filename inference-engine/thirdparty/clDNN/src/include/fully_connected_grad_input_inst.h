@@ -16,29 +16,26 @@
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma once
-#include "api/CPP/fully_connected_grad_input.hpp"
+#include "api/fully_connected_grad_input.hpp"
 #include "primitive_inst.h"
+#include <string>
 
-namespace cldnn
-{
+namespace cldnn {
 template <>
-struct typed_program_node<fully_connected_grad_input> : public typed_program_node_base<fully_connected_grad_input>
-{
+struct typed_program_node<fully_connected_grad_input> : public typed_program_node_base<fully_connected_grad_input> {
     using parent = typed_program_node_base<fully_connected_grad_input>;
 
 public:
     using parent::parent;
 
-    decltype(auto) input() const { return get_dependency(0); }
-    decltype(auto) weights() const { return get_dependency(2); }
-
+    program_node& input() const { return get_dependency(0); }
+    program_node& weights() const { return get_dependency(2); }
 };
 
 using fully_connected_grad_input_node = typed_program_node<fully_connected_grad_input>;
 
 template <>
-class typed_primitive_inst<fully_connected_grad_input> : public typed_primitive_inst_base<fully_connected_grad_input>
-{
+class typed_primitive_inst<fully_connected_grad_input> : public typed_primitive_inst_base<fully_connected_grad_input> {
     using parent = typed_primitive_inst_base<fully_connected_grad_input>;
 
 public:
@@ -48,11 +45,10 @@ public:
 public:
     typed_primitive_inst(network_impl& network, fully_connected_grad_input_node const& node);
 
-    decltype(auto) weights_memory() const { return dep_memory(2); }
+    memory_impl& weights_memory() const { return dep_memory(2); }
     bool bias_term() const { return false; }
-
 };
 
 using fully_connected_grad_input_inst = typed_primitive_inst<fully_connected_grad_input>;
 
-}
+}  // namespace cldnn

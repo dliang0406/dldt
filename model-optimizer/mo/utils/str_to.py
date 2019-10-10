@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -18,6 +18,8 @@
 class StrTo(object):
     @staticmethod
     def tuple(type_of_elements: type, string: str):
+        if type_of_elements == int:
+            string = string.replace('L', '')
         return tuple(type_of_elements(x) for x in string[1:-1].split(','))
 
     @staticmethod

@@ -16,43 +16,38 @@
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma once
-#include "api/CPP/lookup_table.hpp"
+#include "api/lookup_table.hpp"
 #include "primitive_inst.h"
 
 #include <memory>
+#include <string>
 
-namespace cldnn
-{
+namespace cldnn {
 
-    template <>
-    struct typed_program_node<lookup_table> : public typed_program_node_base<lookup_table>
-    {
-        using parent = typed_program_node_base<lookup_table>;
+template <>
+struct typed_program_node<lookup_table> : public typed_program_node_base<lookup_table> {
+    using parent = typed_program_node_base<lookup_table>;
 
-    public:
-        typed_program_node(std::shared_ptr<primitive> prim, program_impl& prog)
-            : parent(prim, prog)
-        {
-        }
-        decltype(auto) input() const { return get_dependency(0); }
-        decltype(auto) indices() const { return get_dependency(1); }
-    };
+public:
+    typed_program_node(std::shared_ptr<primitive> prim, program_impl& prog) : parent(prim, prog) {}
+    program_node& input() const { return get_dependency(0); }
+    program_node& indices() const { return get_dependency(1); }
+};
 
-    using lookup_table_node = typed_program_node<lookup_table>;
+using lookup_table_node = typed_program_node<lookup_table>;
 
-    template <>
-    class typed_primitive_inst<lookup_table> : public typed_primitive_inst_base<lookup_table>
-    {
-        using parent = typed_primitive_inst_base<lookup_table>;
+template <>
+class typed_primitive_inst<lookup_table> : public typed_primitive_inst_base<lookup_table> {
+    using parent = typed_primitive_inst_base<lookup_table>;
 
-    public:
-        static layout calc_output_layout(lookup_table_node const& node);
-        static std::string to_string(lookup_table_node const& node);
+public:
+    static layout calc_output_layout(lookup_table_node const& node);
+    static std::string to_string(lookup_table_node const& node);
 
-    public:
-        typed_primitive_inst(network_impl& network, lookup_table_node const& node);
-    };
+public:
+    typed_primitive_inst(network_impl& network, lookup_table_node const& node);
+};
 
-    using lookup_table_inst = typed_primitive_inst<lookup_table>;
+using lookup_table_inst = typed_primitive_inst<lookup_table>;
 
-}
+}  // namespace cldnn

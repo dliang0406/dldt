@@ -1,13 +1,17 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include "ie_util_internal.hpp"
 #include "graph_tools.hpp"
-#include "caseless.hpp"
+#include "details/caseless.hpp"
 #include "ie_utils.hpp"
-
+#include "ie_icnn_network_stats.hpp"
+#include "cpp/ie_plugin_cpp.hpp"
+#include "details/ie_cnn_network_tools.h"
+#include "file_utils.h"
+#include "net_pass.h"
+#include "precision_utils.h"
 #include <ie_layers.h>
 
 #include <vector>
@@ -20,7 +24,11 @@
 #include <utility>
 #include <iomanip>
 
+using std::string;
+
 namespace InferenceEngine {
+
+using namespace details;
 
 namespace {
 template<typename Visitor>
@@ -115,34 +123,80 @@ CNNLayerPtr layerCloneImpl(const CNNLayer* source) {
     return nullptr;
 }
 
+/* Make this function explicit for TensorIterator layer
+ * because of specific handling of the body field */
+template<>
+CNNLayerPtr layerCloneImpl<TensorIterator>(const CNNLayer* source) {
+    auto layer = dynamic_cast<const TensorIterator*>(source);
+    if (nullptr != layer) {
+        auto newLayer = std::make_shared<TensorIterator>(*layer);
+        newLayer->_fusedWith = nullptr;
+        newLayer->outData.clear();
+        newLayer->insData.clear();
+
+        newLayer->body = NetPass::CopyTIBody(newLayer->body);
+
+        return std::static_pointer_cast<CNNLayer>(newLayer);
+    }
+    return nullptr;
+}
+
 }  // namespace
 
 CNNLayerPtr clonelayer(const CNNLayer& source) {
     using fptr = CNNLayerPtr (*)(const CNNLayer*);
     // Most derived layers must go first in this list
     static const fptr cloners[] = {
-        &layerCloneImpl<BatchNormalizationLayer>,
-        &layerCloneImpl<PowerLayer             >,
-        &layerCloneImpl<ScaleShiftLayer        >,
-        &layerCloneImpl<PReLULayer             >,
-        &layerCloneImpl<TileLayer              >,
-        &layerCloneImpl<ReshapeLayer           >,
-        &layerCloneImpl<CropLayer              >,
-        &layerCloneImpl<EltwiseLayer           >,
-        &layerCloneImpl<ClampLayer             >,
-        &layerCloneImpl<ReLULayer              >,
-        &layerCloneImpl<SoftMaxLayer           >,
-        &layerCloneImpl<GRNLayer               >,
-        &layerCloneImpl<MVNLayer               >,
-        &layerCloneImpl<NormLayer              >,
-        &layerCloneImpl<SplitLayer             >,
-        &layerCloneImpl<ConcatLayer            >,
-        &layerCloneImpl<FullyConnectedLayer    >,
-        &layerCloneImpl<PoolingLayer           >,
-        &layerCloneImpl<DeconvolutionLayer     >,
-        &layerCloneImpl<ConvolutionLayer       >,
-        &layerCloneImpl<WeightableLayer        >,
-        &layerCloneImpl<CNNLayer               >
+        &layerCloneImpl<SelectLayer               >,
+        &layerCloneImpl<BatchNormalizationLayer   >,
+        &layerCloneImpl<TopKLayer                 >,
+        &layerCloneImpl<PowerLayer                >,
+        &layerCloneImpl<ScaleShiftLayer           >,
+        &layerCloneImpl<PReLULayer                >,
+        &layerCloneImpl<TileLayer                 >,
+        &layerCloneImpl<ReshapeLayer              >,
+        &layerCloneImpl<CropLayer                 >,
+        &layerCloneImpl<EltwiseLayer              >,
+        &layerCloneImpl<GemmLayer                 >,
+        &layerCloneImpl<PadLayer                  >,
+        &layerCloneImpl<GatherLayer               >,
+        &layerCloneImpl<StridedSliceLayer         >,
+        &layerCloneImpl<ShuffleChannelsLayer      >,
+        &layerCloneImpl<DepthToSpaceLayer         >,
+        &layerCloneImpl<SpaceToDepthLayer         >,
+        &layerCloneImpl<SparseFillEmptyRowsLayer  >,
+        &layerCloneImpl<ReverseSequenceLayer      >,
+        &layerCloneImpl<RangeLayer                >,
+        &layerCloneImpl<FillLayer                 >,
+        &layerCloneImpl<BroadcastLayer            >,
+        &layerCloneImpl<MathLayer                 >,
+        &layerCloneImpl<ReduceLayer               >,
+        &layerCloneImpl<ClampLayer                >,
+        &layerCloneImpl<ReLULayer                 >,
+        &layerCloneImpl<SoftMaxLayer              >,
+        &layerCloneImpl<GRNLayer                  >,
+        &layerCloneImpl<MVNLayer                  >,
+        &layerCloneImpl<NormLayer                 >,
+        &layerCloneImpl<SplitLayer                >,
+        &layerCloneImpl<ConcatLayer               >,
+        &layerCloneImpl<FullyConnectedLayer       >,
+        &layerCloneImpl<PoolingLayer              >,
+        &layerCloneImpl<DeconvolutionLayer        >,
+        &layerCloneImpl<DeformableConvolutionLayer>,
+        &layerCloneImpl<ConvolutionLayer          >,
+        &layerCloneImpl<TensorIterator            >,
+        &layerCloneImpl<RNNSequenceLayer          >,
+        &layerCloneImpl<LSTMCell                  >,
+        &layerCloneImpl<GRUCell                   >,
+        &layerCloneImpl<RNNCell                   >,
+        &layerCloneImpl<QuantizeLayer             >,
+        &layerCloneImpl<BinaryConvolutionLayer    >,
+        &layerCloneImpl<WeightableLayer           >,
+        &layerCloneImpl<OneHotLayer               >,
+        &layerCloneImpl<CNNLayer                  >,
+        &layerCloneImpl<UniqueLayer               >,
+        &layerCloneImpl<NonMaxSuppressionLayer    >,
+        &layerCloneImpl<ScatterLayer              >
     };
     for (auto cloner : cloners) {
         auto cloned = cloner(&source);
@@ -161,8 +215,13 @@ details::CNNNetworkImplPtr cloneNet(const ICNNNetwork &network) {
         layers.push_back(*i);
         i++;
     }
+
+    InferenceEngine::ICNNNetworkStats* pstatsSrc = nullptr;
+    if (StatusCode::OK != network.getStats(&pstatsSrc, nullptr)) {
+        pstatsSrc = nullptr;
+    }
     // copy of the network
-    details::CNNNetworkImplPtr net = cloneNet(layers);
+    details::CNNNetworkImplPtr net = cloneNet(layers, pstatsSrc);
     // going over output layers and duplicatig them:
     OutputsDataMap outputs;
     network.getOutputsInfo(outputs);
@@ -171,7 +230,9 @@ details::CNNNetworkImplPtr cloneNet(const ICNNNetwork &network) {
     }
     net->setPrecision(network.getPrecision());
     net->setName(network.getName());
+    IE_SUPPRESS_DEPRECATED_START
     net->setTargetDevice(network.getTargetDevice());
+    IE_SUPPRESS_DEPRECATED_END
 
     InputsDataMap externalInputsData;
     network.getInputsInfo(externalInputsData);
@@ -181,7 +242,7 @@ details::CNNNetworkImplPtr cloneNet(const ICNNNetwork &network) {
     for (auto &&it : externalInputsData) {
         auto inp = clonedInputs.find(it.first);
         if (inp != clonedInputs.end() && nullptr != inp->second) {
-            inp->second->setInputPrecision(it.second->getInputPrecision());
+            inp->second->setPrecision(it.second->getPrecision());
             inp->second->getPreProcess() = it.second->getPreProcess();
         }
     }
@@ -191,6 +252,7 @@ details::CNNNetworkImplPtr cloneNet(const ICNNNetwork &network) {
 
 
 details::CNNNetworkImplPtr cloneNet(const std::vector<CNNLayerPtr>& layers,
+                                    const ICNNNetworkStats* networkStats,
                                     std::function<CNNLayerPtr(const CNNLayer&)> layerCloner) {
     // TODO layerCloner std::function is heavy and can be replaced with
     // llvm::function_ref-like lightweight callable when we add one
@@ -231,7 +293,7 @@ details::CNNNetworkImplPtr cloneNet(const std::vector<CNNLayerPtr>& layers,
             auto data = src.lock();
             auto clonedData = createDataImpl(data);
 
-            std::string inputName;
+            string inputName;
             // Find input name
             for (auto&& inp : data->getInputTo()) {
                 if (srcLayer == inp.second) {
@@ -250,9 +312,11 @@ details::CNNNetworkImplPtr cloneNet(const std::vector<CNNLayerPtr>& layers,
             clonedLayer->outData.push_back(clonedData);
             for (auto&& inp : data->getInputTo()) {
                 auto layer = inp.second;
+                // TODO(amalyshe) is it the best place to check priorbox and remove
+                // such edge from outputs?
                 if (std::find(layers.begin(), layers.end(), layer) == layers.end() &&
-                    !(CaselessEq<std::string>()(layer->type, "priorbox") ||
-                      CaselessEq<std::string>()(layer->type, "PriorBoxClustered"))) {
+                    !(CaselessEq<string>()(layer->type, "priorbox") ||
+                      CaselessEq<string>()(layer->type, "PriorBoxClustered"))) {
                     net->addOutput(data->getName());
                     break;
                 }
@@ -269,9 +333,10 @@ details::CNNNetworkImplPtr cloneNet(const std::vector<CNNLayerPtr>& layers,
             auto originalData = clonedDataMap[data];
             assert(nullptr != originalData);
 
-            if (auto originalLayer = originalData->creatorLayer.lock()) {
-                if (CaselessEq<std::string>()(originalLayer->type, "input") ||
-                    CaselessEq<std::string>()(originalLayer->type, "const")) {
+            if (auto originalLayer = originalData->getCreatorLayer().lock()) {
+                if (CaselessEq<string>()(originalLayer->type, "input") ||
+                    CaselessEq<string>()(originalLayer->type, "const") ||
+                    CaselessEq<string>()(originalLayer->type, "memory")) {
                     layer = cloneLayerImpl(*originalLayer);
                     layer->outData.push_back(data);
                     data->getCreatorLayer() = layer;
@@ -281,7 +346,7 @@ details::CNNNetworkImplPtr cloneNet(const std::vector<CNNLayerPtr>& layers,
             if (nullptr == layer) {
                 LayerParams params;
                 params.name = data->getName();
-                params.precision = data->precision;
+                params.precision = data->getPrecision();
                 params.type = "Input";
                 layer = std::make_shared<CNNLayer>(params);
                 // this place should be transactional
@@ -290,7 +355,7 @@ details::CNNNetworkImplPtr cloneNet(const std::vector<CNNLayerPtr>& layers,
                 net->addLayer(layer);
             }
         }
-        if (CaselessEq<std::string>()(layer->type, "input")) {
+        if (CaselessEq<string>()(layer->type, "input")) {
             auto input = std::make_shared<InferenceEngine::InputInfo>();
             input->setInputData(data);
             net->setInputInfo(input);
@@ -299,7 +364,65 @@ details::CNNNetworkImplPtr cloneNet(const std::vector<CNNLayerPtr>& layers,
 
     net->resolveOutput();
 
+    // cloning of statistics
+    InferenceEngine::ICNNNetworkStats* pstatsTarget = nullptr;
+    if (networkStats != nullptr && !networkStats->isEmpty()) {
+        StatusCode st = net->getStats(&pstatsTarget, nullptr);
+        if (st == StatusCode::OK && pstatsTarget) {
+            pstatsTarget->setNodesStats(networkStats->getNodesStats());
+        }
+    }
+
     return net;
+}
+
+Blob::Ptr convertBlobFP16toFP32(const Blob::Ptr& blob) {
+    Blob::Ptr weightsBlob = make_shared_blob<float>({ Precision::FP32, blob->getTensorDesc().getDims(), blob->getTensorDesc().getLayout()});
+    weightsBlob->allocate();
+    float* target = weightsBlob->buffer().as<float*>();
+    short* source = blob->buffer().as<short *>();
+    PrecisionUtils::f16tof32Arrays(target, source, blob->size(), 1.0f, 0.0f);
+    return weightsBlob;
+}
+
+void convertLayerFP16toFP32(const CNNLayerPtr& layer) {
+    // take all input and output data, set FP32 precision for them
+    for (auto &o : layer->outData) {
+        if (Precision::FP16 == o->getPrecision()) o->setPrecision(Precision::FP32);
+    }
+    for (auto &i : layer->insData) {
+        if (Precision::FP16 == i.lock()->getPrecision()) i.lock()->setPrecision(Precision::FP32);
+    }
+
+    if (layer->precision == Precision::FP16) layer->precision = Precision::FP32;
+
+    auto tiLayer = dynamic_cast<InferenceEngine::TensorIterator *>(layer.get());
+    if (tiLayer) {
+        // needs to update TI body and convert all the layers to FP32
+        const auto all_orig = NetPass::TIBodySortTopologically(tiLayer->body);
+        for (auto &orig : all_orig) {
+            convertLayerFP16toFP32(orig);
+        }
+    }
+
+    auto wLayer = dynamic_cast<InferenceEngine::WeightableLayer *>(layer.get());
+    if (wLayer) {
+        if (wLayer->_weights && wLayer->_weights->getTensorDesc().getPrecision() == Precision::FP16) {
+            wLayer->_weights = convertBlobFP16toFP32(wLayer->_weights);
+        }
+        if (wLayer->_biases && wLayer->_biases->getTensorDesc().getPrecision() == Precision::FP16) {
+            wLayer->_biases = convertBlobFP16toFP32(wLayer->_biases);
+        }
+    }
+
+    for (auto &&blob : layer->blobs) {
+        auto &&data = blob.second;
+        if (nullptr != data) {
+            if (data->getTensorDesc().getPrecision() == Precision::FP16) {
+                data = convertBlobFP16toFP32(data);
+            }
+        }
+    }
 }
 
 namespace traverse {
@@ -318,7 +441,7 @@ void forward(const CNNLayerPtr& layer, std::deque<InferenceEngine::CNNLayerPtr>&
 void backward(const CNNLayerPtr& layer, std::deque<InferenceEngine::CNNLayerPtr>& layers) {
     for (const auto& data : layer->insData) {
         const auto data_ptr = data.lock();
-        const auto creatorLayer = data_ptr->creatorLayer.lock();
+        const auto creatorLayer = data_ptr->getCreatorLayer().lock();
         if (nullptr != creatorLayer &&
             creatorLayer->type != "Input" &&
             creatorLayer->type != "input" ) {
@@ -369,7 +492,7 @@ struct NodePrinter {
         return static_cast<bool>(printed_data.count(datum.get()));
     }
 
-    std::string colorToStr(FILL_COLOR color) {
+    string colorToStr(FILL_COLOR color) {
         switch (color) {
             case DATA :
                 return "#FCF6E3";
@@ -382,14 +505,21 @@ struct NodePrinter {
         }
     }
 
-    std::string formatSize_(unsigned int x, unsigned int y) {
-        return x == y ? std::to_string(x) :
-               std::to_string(x) + "x" + std::to_string(y);
+    string formatSize_(const std::vector<unsigned int>& spatialDims) {
+        string result;
+        if (spatialDims.empty()) return result;
+        result = std::to_string(spatialDims[0]);
+        for (auto dim : spatialDims) {
+            result += "x" + std::to_string(dim);
+        }
+        return result;
     }
 
-    std::string cleanNodeName_(std::string node_name) const {
-        // remove dot sumbol form node name. It is incorrectly displayed in xdot
+    string cleanNodeName_(string node_name) const {
+        // remove dot and dash symbols from node name. It is incorrectly displayed in xdot
         node_name.erase(remove(node_name.begin(), node_name.end(), '.'), node_name.end());
+        std::replace(node_name.begin(), node_name.end(), '-', '_');
+        std::replace(node_name.begin(), node_name.end(), ':', '_');
         return node_name;
     }
 
@@ -411,45 +541,86 @@ struct NodePrinter {
         if (type == "Convolution") {
             auto* conv = dynamic_cast<ConvolutionLayer*>(layer.get());
 
-            unsigned ker_y = conv->_kernel_y,
-                ker_x = conv->_kernel_x,
-                pad_x = conv->_padding_x,
-                pad_y = conv->_padding_y,
-                depth = conv->_out_depth,
-                stride_x = conv->_stride_x,
-                stride_y = conv->_stride_y,
-                dilation_x = conv->_dilation_x,
-                dilation_y = conv->_dilation_y,
-                group = conv->_group;
+            if (conv != nullptr) {
+                unsigned int
+                    depth = conv->_out_depth,
+                    group = conv->_group;
 
-            printed_properties.emplace_back("kernel size", formatSize_(ker_x, ker_y));
-            printed_properties.emplace_back("output depth", std::to_string(depth));
-            printed_properties.emplace_back("group", std::to_string(group));
-            printed_properties.emplace_back("padding", formatSize_(pad_x, pad_y));
-            printed_properties.emplace_back("stride", formatSize_(stride_x, stride_y));
-            printed_properties.emplace_back("stride", formatSize_(stride_x, stride_y));
-            if (dilation_x != 1 || dilation_y != 1)
-                printed_properties.emplace_back("dilation", formatSize_(dilation_x, dilation_y));
+                printed_properties.emplace_back("kernel size", formatSize_({&(conv->_kernel[0]), &(conv->_kernel[conv->_kernel.size() - 1])}));
+                printed_properties.emplace_back("output depth", std::to_string(depth));
+                printed_properties.emplace_back("group", std::to_string(group));
+                printed_properties.emplace_back("padding begin", formatSize_({&(conv->_padding[0]), &(conv->_padding[conv->_padding.size() - 1])}));
+                printed_properties.emplace_back("padding end", formatSize_({&(conv->_pads_end[0]), &(conv->_pads_end[conv->_pads_end.size() - 1])}));
+                printed_properties.emplace_back("strides", formatSize_({&(conv->_stride[0]), &(conv->_stride[conv->_stride.size() - 1])}));
+                printed_properties.emplace_back("dilations", formatSize_({&(conv->_dilation[0]), &(conv->_dilation[conv->_dilation.size() - 1])}));
+            }
         } else if (type == "Pooling") {
             auto* pool = dynamic_cast<PoolingLayer*>(layer.get());
 
-            unsigned int ker_y = pool->_kernel_y,
-                ker_x = pool->_kernel_x,
-                pad_x = pool->_padding_x,
-                pad_y = pool->_padding_y,
-                stride_x = pool->_stride_x,
-                stride_y = pool->_stride_y;
-
-            printed_properties.emplace_back("window size", formatSize_(ker_x, ker_y));
-            printed_properties.emplace_back("padding", formatSize_(pad_x, pad_y));
-            printed_properties.emplace_back("stride", formatSize_(stride_x, stride_y));
+            if (pool != nullptr) {
+                printed_properties.emplace_back("window size", formatSize_({&(pool->_kernel[0]), &(pool->_kernel[pool->_kernel.size() - 1])}));
+                printed_properties.emplace_back("padding begin", formatSize_({&(pool->_padding[0]), &(pool->_padding[pool->_padding.size() - 1])}));
+                printed_properties.emplace_back("padding end", formatSize_({&(pool->_pads_end[0]), &(pool->_pads_end[pool->_pads_end.size() - 1])}));
+                printed_properties.emplace_back("strides", formatSize_({&(pool->_stride[0]), &(pool->_stride[pool->_stride.size() - 1])}));
+            }
         } else if (type == "ReLU") {
             auto* relu = dynamic_cast<ReLULayer*>(layer.get());
 
-            float negative_slope = relu->negative_slope;
+            if (relu != nullptr) {
+                float negative_slope = relu->negative_slope;
 
-            if (negative_slope != 0.0f)
-                printed_properties.emplace_back("negative_slope", std::to_string(negative_slope));
+                if (negative_slope != 0.0f)
+                    printed_properties.emplace_back("negative_slope", std::to_string(negative_slope));
+            }
+        } else if (type == "Eltwise") {
+            auto* eltwise = dynamic_cast<EltwiseLayer*>(layer.get());
+
+            if (eltwise != nullptr) {
+                std::string operation;
+
+                if (eltwise->_operation == EltwiseLayer::Sum)
+                    operation = "Sum";
+                else if (eltwise->_operation == EltwiseLayer::Prod)
+                    operation = "Prod";
+                else if (eltwise->_operation == EltwiseLayer::Max)
+                    operation = "Max";
+                else if (eltwise->_operation == EltwiseLayer::Sub)
+                    operation = "Sub";
+                else if (eltwise->_operation == EltwiseLayer::Min)
+                    operation = "Min";
+                else if (eltwise->_operation == EltwiseLayer::Div)
+                    operation = "Div";
+                else if (eltwise->_operation == EltwiseLayer::Squared_diff)
+                    operation = "Squared_diff";
+                else if (eltwise->_operation == EltwiseLayer::Equal)
+                    operation = "Equal";
+                else if (eltwise->_operation == EltwiseLayer::Not_equal)
+                    operation = "Not_equal";
+                else if (eltwise->_operation == EltwiseLayer::Less)
+                    operation = "Less";
+                else if (eltwise->_operation == EltwiseLayer::Less_equal)
+                    operation = "Less_equal";
+                else if (eltwise->_operation == EltwiseLayer::Greater)
+                    operation = "Greater";
+                else if (eltwise->_operation == EltwiseLayer::Greater_equal)
+                    operation = "Greater_equal";
+                else if (eltwise->_operation == EltwiseLayer::Logical_NOT)
+                    operation = "Logical_NOT";
+                else if (eltwise->_operation == EltwiseLayer::Logical_AND)
+                    operation = "Logical_AND";
+                else if (eltwise->_operation == EltwiseLayer::Logical_OR)
+                    operation = "Logical_OR";
+                else if (eltwise->_operation == EltwiseLayer::Logical_XOR)
+                    operation = "Logical_XOR";
+                else if (eltwise->_operation == EltwiseLayer::Floor_mod)
+                    operation = "Floor_mod";
+                else if (eltwise->_operation == EltwiseLayer::Pow)
+                    operation = "Pow";
+                else if (eltwise->_operation == EltwiseLayer::Mean)
+                    operation = "Mean";
+
+                printed_properties.emplace_back("operation", operation);
+            }
         }
 
         if (layer_cb != nullptr) {
@@ -471,34 +642,36 @@ struct NodePrinter {
         };
 
         std::stringstream dims_ss;
-        size_t idx = data->dims.size();
+        size_t idx = data->getTensorDesc().getDims().size();
         dims_ss << '[';
-        for (auto &dim : data->dims) {
+        for (auto &dim : data->getTensorDesc().getDims()) {
             dims_ss << dim << ((--idx) != 0u ? ", " : "");
         }
         dims_ss << ']';
 
         printed_properties.emplace_back("dims", dims_ss.str());
-        printNode(node_name, data->name, node_properties, printed_properties);
+        printed_properties.emplace_back("precision", data->getPrecision().name());
+
+        printNode(node_name, data->getName(), node_properties, printed_properties);
     }
 
-    void printNode(std::string const &node_name, const std::string &node_title,
+    void printNode(string const &node_name, const string &node_title,
                    ordered_properties const &node_properties,
                    ordered_properties const &printed_properties) {
-        // normalization of names, removing all prohinited symbols like "/"
-        std::string nodeNameN = node_name;
+        // normalization of names, removing all prohibited symbols like "/"
+        string nodeNameN = node_name;
         std::replace(nodeNameN.begin(), nodeNameN.end(), '/', '_');
-        std::string dataNameN = node_title;
+        string dataNameN = node_title;
         std::replace(dataNameN.begin(), dataNameN.end(), '/', '_');
 
         out << '\t' << nodeNameN << " [";
-        for (auto &node_propertie : node_properties) {
-            out << node_propertie.first << "=\"" << node_propertie.second << "\", ";
+        for (auto &node_property : node_properties) {
+            out << node_property.first << "=\"" << node_property.second << "\", ";
         }
 
         out << "label=\"" << node_title;
-        for (auto &printed_propertie : printed_properties) {
-            out << "\\n" << printed_propertie.first << ": " << printed_propertie.second;
+        for (auto &printed_property : printed_properties) {
+            out << "\\n" << printed_property.first << ": " << printed_property.second;
         }
         out << "\"];\n";
     }
@@ -517,17 +690,9 @@ struct NodePrinter {
 void saveGraphToDot(InferenceEngine::ICNNNetwork &network, std::ostream &out, printer_callback layer_cb) {
     NodePrinter printer(out, std::move(layer_cb));
 
-    CNNLayerSet inputs;
-    for (auto& data : getRootDataObjects(network)) {
-        assert(nullptr != data);
-        for (auto& l :  data->getInputTo()) {
-            inputs.insert(l.second);
-        }
-    }
-
     out << "strict digraph Network {\n";
     // Traverse graph and print nodes
-    CNNNetForestDFS(inputs, [&](CNNLayerPtr layer) {
+    for (const auto &layer : details::CNNNetSortTopologically(network)) {
         printer.printLayerNode(layer);
 
         // Print output Data Object
@@ -549,8 +714,7 @@ void saveGraphToDot(InferenceEngine::ICNNNetwork &network, std::ostream &out, pr
             // to remove duplicate edges
             printer.printEdge(layer, dataptr, true);
         }
-    }, true);
-
+    }
     out << "}" << std::endl;
 }
 
@@ -561,13 +725,45 @@ std::unordered_set<DataPtr> getRootDataObjects(ICNNNetwork &network) {
         CNNLayer::Ptr layer = *i;
 
         // TODO: Data without creatorLayer
-        if (CaselessEq<std::string>()(layer->type, "input") ||
-            CaselessEq<std::string>()(layer->type, "const")) {
+        if (CaselessEq<string>()(layer->type, "input") ||
+            CaselessEq<string>()(layer->type, "const") ||
+            CaselessEq<string>()(layer->type, "memory")) {
             ret.insert(layer->outData.begin(), layer->outData.end());
         }
         i++;
     }
     return ret;
+}
+
+namespace {
+
+std::string getPathName(const std::string & s) {
+    size_t i = s.rfind(FileUtils::FileSeparator, s.length());
+    if (i != std::string::npos) {
+        return(s.substr(0, i));
+    }
+
+    return std::string();
+}
+
+}  // namespace
+
+std::string getIELibraryPath() {
+#if defined(_WIN32) || defined(_WIN64)
+    char ie_library_path[2048];
+    HMODULE hm = NULL;
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCSTR)getIELibraryPath, &hm)) {
+        THROW_IE_EXCEPTION << "GetModuleHandle returned " << GetLastError();
+    }
+    GetModuleFileNameA(hm, (LPSTR)ie_library_path, sizeof(ie_library_path));
+    return getPathName(ie_library_path);
+#else
+    Dl_info info;
+    dladdr(reinterpret_cast<void *>(getIELibraryPath), &info);
+    return getPathName(info.dli_fname);
+#endif
 }
 
 }  // namespace InferenceEngine

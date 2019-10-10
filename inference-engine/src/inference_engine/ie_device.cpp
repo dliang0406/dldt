@@ -1,71 +1,58 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
+#include <vector>
+#include <string>
 #include <ie_device.hpp>
 #include <details/ie_exception.hpp>
 #include "description_buffer.hpp"
 
 using namespace InferenceEngine;
 
-FindPluginResponse InferenceEngine::findPlugin(const FindPluginRequest& req) {
-    switch (req.device) {
-    case TargetDevice::eCPU:
-        return { {
-#ifdef ENABLE_MKL_DNN
-                "MKLDNNPlugin",
-#endif
-#ifdef ENABLE_OPENVX_CVE
-                "OpenVXPluginCVE",
-#elif defined ENABLE_OPENVX
-                "OpenVXPlugin",
-#endif
-            } };
-    case TargetDevice::eGPU:
-        return { {
-#ifdef ENABLE_CLDNN
-                "clDNNPlugin",
-#endif
-#ifdef ENABLE_OPENVX
-                "OpenVXPlugin",
-#endif
-            } };
-    case TargetDevice::eFPGA:
-        return{ {
-#ifdef ENABLE_DLIA
-                "dliaPlugin",
-#endif
-#ifdef ENABLE_OPENVX
-                "OpenVXPlugin",
-#endif
-            } };
-    case TargetDevice::eMYRIAD:
-        return{ {
-#ifdef ENABLE_MYRIAD
-                "myriadPlugin",
-#endif
-            } };
-#ifdef ENABLE_HDDL
-    case TargetDevice::eHDDL:
-        return{ {
-                "HDDLPlugin",
-            } };
-#endif
-        case TargetDevice::eGNA:
-            return{ {
-#ifdef ENABLE_GNA
-                        "GNAPlugin",
-#endif
-                    } };
-    case TargetDevice::eHETERO:
-        return{ {
-                "HeteroPlugin",
-            } };
+IE_SUPPRESS_DEPRECATED_START
 
-    default:
-        THROW_IE_EXCEPTION << "Cannot find plugin for device: " << getDeviceName(req.device);
+FindPluginResponse InferenceEngine::findPlugin(const FindPluginRequest& req) {
+    std::vector<std::string> pluginVec;
+    switch (req.device) {
+        case TargetDevice::eCPU:
+#ifdef ENABLE_MKL_DNN
+            pluginVec.push_back("MKLDNNPlugin");
+#endif
+            break;
+        case TargetDevice::eGPU:
+#ifdef ENABLE_CLDNN
+            pluginVec.push_back("clDNNPlugin");
+#endif
+            break;
+        case TargetDevice::eFPGA:
+            pluginVec.push_back("dliaPlugin");
+            break;
+        case TargetDevice::eMYRIAD:
+#ifdef ENABLE_MYRIAD
+            pluginVec.push_back("myriadPlugin");
+#endif
+            break;
+        case TargetDevice::eHDDL:
+            pluginVec.push_back("HDDLPlugin");
+            break;
+        case TargetDevice::eGNA:
+#ifdef ENABLE_GNA
+            pluginVec.push_back("GNAPlugin");
+#endif
+            break;
+        case TargetDevice::eMULTI:
+            pluginVec.push_back("MultiDevicePlugin");
+            break;
+        case TargetDevice::eHETERO:
+            pluginVec.push_back("HeteroPlugin");
+            break;
+
+        default:
+            THROW_IE_EXCEPTION << "Cannot find plugin for device: " << getDeviceName(req.device);
     }
+    std::for_each(pluginVec.begin(), pluginVec.end(), [](std::string &name){ name = name + IE_BUILD_POSTFIX;});
+    return {pluginVec};
 }
 
 INFERENCE_ENGINE_API(StatusCode) InferenceEngine::findPlugin(
@@ -78,3 +65,5 @@ INFERENCE_ENGINE_API(StatusCode) InferenceEngine::findPlugin(
     }
     return OK;
 }
+
+IE_SUPPRESS_DEPRECATED_END

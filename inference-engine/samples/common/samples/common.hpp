@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -15,36 +14,39 @@
 #include <vector>
 #include <list>
 #include <limits>
-#include <random>
-#include <cctype>
 #include <functional>
-#include <time.h>
-#include <iostream>
 #include <fstream>
 #include <iomanip>
 #include <utility>
-
 #include <algorithm>
-#include <chrono>
+#include <random>
 
-#ifdef USE_OPENCV
-    #include <opencv2/opencv.hpp>
-#endif
-
-#include <ie_plugin_dispatcher.hpp>
-#include <ie_plugin_ptr.hpp>
-#include <cpp/ie_cnn_net_reader.h>
+#include <ie_core.hpp>
+#include <ie_plugin_config.hpp>
 #include <cpp/ie_infer_request.hpp>
-#include <ie_device.hpp>
 #include <ie_blob.h>
 
 #ifndef UNUSED
-  #ifdef WIN32
+  #if defined (_MSC_VER) && !defined (__clang__)
     #define UNUSED
   #else
     #define UNUSED  __attribute__((unused))
   #endif
 #endif
+
+/**
+ * @brief This class represents a console error listener.
+ *
+ */
+class ConsoleErrorListener : public InferenceEngine::IErrorListener {
+    /**
+     * @brief The plugin calls this method with a null terminated error message (in case of error)
+     * @param msg Error message
+     */
+    void onError(const char *msg) noexcept override {
+        std::clog << "Device message: " << msg << std::endl;
+    }
+};
 
 /**
  * @brief Trims from both ends (in place)
@@ -55,48 +57,6 @@ inline std::string &trim(std::string &s) {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(), std::not1(std::ptr_fun<int, int>(std::isspace))));
     s.erase(std::find_if(s.rbegin(), s.rend(), std::not1(std::ptr_fun<int, int>(std::isspace))).base(), s.end());
     return s;
-}
-
-/**
-* @brief Converts string to TargetDevice
-* @param deviceName - string value representing device
-* @return TargetDevice value that corresponds to input string.
-*         eDefault in case no corresponding value was found
-*/
-static InferenceEngine::TargetDevice getDeviceFromStr(const std::string &deviceName) {
-    return InferenceEngine::TargetDeviceInfo::fromStr(deviceName);
-}
-
-/**
-* @brief Loads plugin from directories
-* @param pluginDirs - plugin paths
-* @param plugin - plugin name
-* @param device - device to infer on
-* @return Plugin pointer
-*/
-static InferenceEngine::InferenceEnginePluginPtr selectPlugin(const std::vector<std::string> &pluginDirs,
-                                                              const std::string &plugin,
-                                                              InferenceEngine::TargetDevice device) {
-    InferenceEngine::PluginDispatcher dispatcher(pluginDirs);
-
-    if (!plugin.empty()) {
-        return dispatcher.getPluginByName(plugin);
-    } else {
-        return dispatcher.getSuitablePlugin(device);
-    }
-}
-
-/**
- * @brief Loads plugin from directories
- * @param pluginDirs - plugin paths
- * @param plugin - plugin name
- * @param device - string representation of device to infer on
- * @return Plugin pointer
- */
-static UNUSED InferenceEngine::InferenceEnginePluginPtr selectPlugin(const std::vector<std::string> &pluginDirs,
-                                                                     const std::string &plugin,
-                                                                     const std::string &device) {
-    return selectPlugin(pluginDirs, plugin, getDeviceFromStr(device));
 }
 
 /**
@@ -137,64 +97,47 @@ static UNUSED std::ostream &operator<<(std::ostream &os, const InferenceEngine::
     return os;
 }
 
-/**
- * @class PluginVersion
- * @brief A PluginVersion class stores plugin version and initialization status
- */
-struct PluginVersion : public InferenceEngine::Version {
-    bool initialized = false;
+inline std::ostream &operator<<(std::ostream &os, const InferenceEngine::Version &version) {
+    os << "\t" << version.description << " version ......... ";
+    os << version.apiVersion.major << "." << version.apiVersion.minor;
 
-    explicit PluginVersion(const InferenceEngine::Version *ver) {
-        if (nullptr == ver) {
-            return;
-        }
-        InferenceEngine::Version::operator=(*ver);
-        initialized = true;
-    }
-
-    operator bool() const noexcept {
-        return initialized;
-    }
-};
-
-static UNUSED std::ostream &operator<<(std::ostream &os, const PluginVersion &version) {
-    os << "\tPlugin version ......... ";
-    if (!version) {
-        os << "UNKNOWN";
-    } else {
-        os << version.apiVersion.major << "." << version.apiVersion.minor;
-    }
-
-    os << "\n\tPlugin name ............ ";
-    if (!version || version.description == nullptr) {
-        os << "UNKNOWN";
-    } else {
-        os << version.description;
-    }
-
-    os << "\n\tPlugin build ........... ";
-    if (!version || version.buildNumber == nullptr) {
-        os << "UNKNOWN";
-    } else {
-        os << version.buildNumber;
-    }
+    os << "\n\tBuild ........... ";
+    os << version.buildNumber;
 
     return os;
 }
 
-inline void printPluginVersion(InferenceEngine::InferenceEnginePluginPtr ptr, std::ostream& stream) {
-    const PluginVersion *pluginVersion;
-    ptr->GetVersion((const InferenceEngine::Version*&)pluginVersion);
-    stream << pluginVersion << std::endl;
+inline std::ostream &operator<<(std::ostream &os, const std::map<std::string, InferenceEngine::Version> &versions) {
+    for (auto && version : versions) {
+        os << "\t" << version.first << std::endl;
+        os << version.second << std::endl;
+    }
+
+    return os;
 }
 
 static UNUSED std::vector<std::vector<size_t>> blobToImageOutputArray(InferenceEngine::TBlob<float>::Ptr output,
                                                                       size_t *pWidth, size_t *pHeight,
                                                                       size_t *pChannels) {
     std::vector<std::vector<size_t>> outArray;
-    size_t W = output->dims().at(0);
-    size_t H = output->dims().at(1);
-    size_t C = output->dims().at(2);
+    size_t W = 0, C = 0, H = 0;
+
+    auto outputDims = output->getTensorDesc().getDims();
+    if (outputDims.size() == 3) {
+        C = outputDims.at(0);
+        H = outputDims.at(1);
+        W = outputDims.at(2);
+    } else if (outputDims.size() == 4) {
+        C = outputDims.at(1);
+        H = outputDims.at(2);
+        W = outputDims.at(3);
+    } else if (outputDims.size() == 5) {
+        C = outputDims.at(1);
+        H = outputDims.at(3);
+        W = outputDims.at(4);
+    } else {
+        THROW_IE_EXCEPTION << "Output blob has unsupported layout " << output->getTensorDesc().getLayout();
+    }
 
     // Get classes
     const float *outData = output->data();
@@ -462,9 +405,10 @@ static UNUSED bool writeOutputBmp(std::string name, unsigned char *data, size_t 
 * @param width - width of the rectangle
 * @param rectangles - vector points for the rectangle, should be 4x compared to num classes
 * @param classes - vector of classes
+* @param thickness - thickness of a line (in pixels) to be used for bounding boxes
 */
-static UNUSED void addRectangles(unsigned char *data, size_t height, size_t width, std::vector<int> rectangles, std::vector<int> classes) {
-    std::vector<Color> colors = {
+static UNUSED void addRectangles(unsigned char *data, size_t height, size_t width, std::vector<int> rectangles, std::vector<int> classes, int thickness = 1) {
+    std::vector<Color> colors = {  // colors to be used for bounding boxes
         { 128, 64,  128 },
         { 232, 35,  244 },
         { 70,  70,  70 },
@@ -497,38 +441,47 @@ static UNUSED void addRectangles(unsigned char *data, size_t height, size_t widt
         int w = rectangles.at(i * 4 + 2);
         int h = rectangles.at(i * 4 + 3);
 
+        int cls = classes.at(i) % colors.size();  // color of a bounding box line
+
         if (x < 0) x = 0;
         if (y < 0) y = 0;
         if (w < 0) w = 0;
         if (h < 0) h = 0;
 
-        if (x >= width) { x = width - 1; w = 0; }
-        if (y >= height) { y = height - 1; h = 0; }
+        if (static_cast<std::size_t>(x) >= width) { x = width - 1; w = 0; thickness = 1; }
+        if (static_cast<std::size_t>(y) >= height) { y = height - 1; h = 0; thickness = 1; }
 
-        if (x + w >= width) { w = width - x - 1; }
-        if (y + h >= height) { h = height - y - 1; }
+        if (static_cast<std::size_t>(x + w) >= width) { w = width - x - 1; }
+        if (static_cast<std::size_t>(y + h) >= height) { h = height - y - 1; }
 
-        size_t shift_first = y*width * 3;
-        size_t shift_second = (y + h)*width * 3;
-        int cls = classes.at(i) % colors.size();
-        for (int i = x; i < x + w; i++) {
-            data[shift_first + i * 3] = colors.at(cls).red();
-            data[shift_first + i * 3 + 1] = colors.at(cls).green();
-            data[shift_first + i * 3 + 2] = colors.at(cls).blue();
-            data[shift_second + i * 3] = colors.at(cls).red();
-            data[shift_second + i * 3 + 1] = colors.at(cls).green();
-            data[shift_second + i * 3 + 2] = colors.at(cls).blue();
+        thickness = std::min(std::min(thickness, w / 2 + 1), h / 2 + 1);
+
+        size_t shift_first;
+        size_t shift_second;
+        for (int t = 0; t < thickness; t++) {
+            shift_first = (y + t) * width * 3;
+            shift_second = (y + h - t) * width * 3;
+            for (int ii = x; ii < x + w + 1; ii++) {
+                data[shift_first + ii * 3] = colors.at(cls).red();
+                data[shift_first + ii * 3 + 1] = colors.at(cls).green();
+                data[shift_first + ii * 3 + 2] = colors.at(cls).blue();
+                data[shift_second + ii * 3] = colors.at(cls).red();
+                data[shift_second + ii * 3 + 1] = colors.at(cls).green();
+                data[shift_second + ii * 3 + 2] = colors.at(cls).blue();
+            }
         }
 
-        shift_first = x * 3;
-        shift_second = (x + w) * 3;
-        for (int i = y; i < y + h; i++) {
-            data[shift_first + i*width * 3] = colors.at(cls).red();
-            data[shift_first + i*width * 3 + 1] = colors.at(cls).green();
-            data[shift_first + i*width * 3 + 2] = colors.at(cls).blue();
-            data[shift_second + i*width * 3] = colors.at(cls).red();
-            data[shift_second + i*width * 3 + 1] = colors.at(cls).green();
-            data[shift_second + i*width * 3 + 2] = colors.at(cls).blue();
+        for (int t = 0; t < thickness; t++) {
+            shift_first = (x + t) * 3;
+            shift_second = (x + w - t) * 3;
+            for (int ii = y; ii < y + h + 1; ii++) {
+                data[shift_first + ii * width * 3] = colors.at(cls).red();
+                data[shift_first + ii * width * 3 + 1] = colors.at(cls).green();
+                data[shift_first + ii * width * 3 + 2] = colors.at(cls).blue();
+                data[shift_second + ii * width * 3] = colors.at(cls).red();
+                data[shift_second + ii * width * 3 + 1] = colors.at(cls).green();
+                data[shift_second + ii * width * 3 + 2] = colors.at(cls).blue();
+            }
         }
     }
 }
@@ -613,24 +566,32 @@ static UNUSED bool writeOutputBmp(unsigned char *data, size_t height, size_t wid
     return true;
 }
 
-inline double getDurationOf(std::function<void()> func) {
-    auto t0 = std::chrono::high_resolution_clock::now();
-    func();
-    auto t1 = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<float> fs = t1 - t0;
-    return std::chrono::duration_cast<std::chrono::duration<double, std::ratio<1, 1000>>>(fs).count();
+static std::vector<std::pair<std::string, InferenceEngine::InferenceEngineProfileInfo>>
+perfCountersSorted(std::map<std::string, InferenceEngine::InferenceEngineProfileInfo> perfMap) {
+    using perfItem = std::pair<std::string, InferenceEngine::InferenceEngineProfileInfo>;
+    std::vector<perfItem> sorted;
+    for (auto &kvp : perfMap) sorted.push_back(kvp);
+
+    std::stable_sort(sorted.begin(), sorted.end(),
+                     [](const perfItem& l, const perfItem& r) {
+                         return l.second.execution_index < r.second.execution_index;
+                     });
+
+    return sorted;
 }
 
-
 static UNUSED void printPerformanceCounts(const std::map<std::string, InferenceEngine::InferenceEngineProfileInfo>& performanceMap,
-                                          std::ostream &stream,
+                                          std::ostream &stream, std::string deviceName,
                                           bool bshowHeader = true) {
     long long totalTime = 0;
     // Print performance counts
     if (bshowHeader) {
         stream << std::endl << "performance counts:" << std::endl << std::endl;
     }
-    for (const auto & it : performanceMap) {
+
+    auto performanceMapSorted = perfCountersSorted(performanceMap);
+
+    for (const auto & it : performanceMapSorted) {
         std::string toPrint(it.first);
         const int maxLayerName = 30;
 
@@ -654,27 +615,57 @@ static UNUSED void printPerformanceCounts(const std::map<std::string, InferenceE
         }
         stream << std::setw(30) << std::left << "layerType: " + std::string(it.second.layer_type) + " ";
         stream << std::setw(20) << std::left << "realTime: " + std::to_string(it.second.realTime_uSec);
-        stream << std::setw(20) << std::left << " cpu: "  + std::to_string(it.second.cpu_uSec);
+        stream << std::setw(20) << std::left << "cpu: "  + std::to_string(it.second.cpu_uSec);
         stream << " execType: " << it.second.exec_type << std::endl;
         if (it.second.realTime_uSec > 0) {
             totalTime += it.second.realTime_uSec;
         }
     }
     stream << std::setw(20) << std::left << "Total time: " + std::to_string(totalTime) << " microseconds" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Full device name: " << deviceName << std::endl;
+    std::cout << std::endl;
 }
 
-static UNUSED void printPerformanceCounts(InferenceEngine::InferRequest request, std::ostream &stream) {
-    auto perfomanceMap = request.GetPerformanceCounts();
-    printPerformanceCounts(perfomanceMap, stream);
+static UNUSED void printPerformanceCounts(InferenceEngine::InferRequest request, std::ostream &stream, std::string deviceName, bool bshowHeader = true) {
+    auto performanceMap = request.GetPerformanceCounts();
+    printPerformanceCounts(performanceMap, stream, deviceName, bshowHeader);
 }
 
-/**
- * @deprecated
- */
-static UNUSED void printPerformanceCountsPlugin(InferenceEngine::InferenceEnginePluginPtr plugin, std::ostream &stream) {
-    std::map<std::string, InferenceEngine::InferenceEngineProfileInfo> perfomanceMap;
-    plugin->GetPerformanceCounts(perfomanceMap, nullptr);
-    printPerformanceCounts(perfomanceMap, stream);
+inline std::map<std::string, std::string> getMapFullDevicesNames(InferenceEngine::Core& ie, std::vector<std::string> devices) {
+    std::map<std::string, std::string> devicesMap;
+    InferenceEngine::Parameter p;
+    for (std::string& deviceName : devices) {
+        if (deviceName != "") {
+            try {
+                p = ie.GetMetric(deviceName, METRIC_KEY(FULL_DEVICE_NAME));
+                devicesMap.insert(std::pair<std::string, std::string>(deviceName, p.as<std::string>()));
+            }
+            catch (InferenceEngine::details::InferenceEngineException &) {
+            }
+        }
+    }
+    return devicesMap;
+}
+
+inline std::string getFullDeviceName(std::map<std::string, std::string>& devicesMap, std::string device) {
+    std::map<std::string, std::string>::iterator it = devicesMap.find(device);
+    if (it != devicesMap.end()) {
+        return it->second;
+    } else {
+        return "";
+    }
+}
+
+inline std::string getFullDeviceName(InferenceEngine::Core& ie, std::string device) {
+    InferenceEngine::Parameter p;
+    try {
+        p = ie.GetMetric(device, METRIC_KEY(FULL_DEVICE_NAME));
+        return  p.as<std::string>();
+    }
+    catch (InferenceEngine::details::InferenceEngineException &) {
+        return "";
+    }
 }
 
 /**
@@ -686,8 +677,8 @@ public:
     float xmin, xmax, ymin, ymax, prob;
     bool difficult;
 
-    DetectedObject(int objectType, float xmin, float ymin, float xmax, float ymax, float prob, bool difficult = false)
-        : objectType(objectType), xmin(xmin), xmax(xmax), ymin(ymin), ymax(ymax), prob(prob), difficult(difficult) {
+    DetectedObject(int _objectType, float _xmin, float _ymin, float _xmax, float _ymax, float _prob, bool _difficult = false)
+        : objectType(_objectType), xmin(_xmin), xmax(_xmax), ymin(_ymin), ymax(_ymax), prob(_prob), difficult(_difficult) {
     }
 
     DetectedObject(const DetectedObject& other) = default;
@@ -757,8 +748,8 @@ public:
     const std::list<DetectedObject> alist;
     const bool check_probs;
 
-    explicit ImageDescription(const std::list<DetectedObject> &alist, bool check_probs = false)
-            : alist(alist), check_probs(check_probs) {
+    explicit ImageDescription(const std::list<DetectedObject> &_alist, bool _check_probs = false)
+            : alist(_alist), check_probs(_check_probs) {
     }
 
     static float ioUMultiple(const ImageDescription &detectedObjects, const ImageDescription &desiredObjects) {
@@ -791,8 +782,6 @@ public:
             float coeff = 1.0;
             if (check_probs) {
                 if (bestJ != doB.end()) {
-                    DetectedObject test = *bestJ;
-                    DetectedObject test1 = *doS.begin();
                     float mn = std::min((*bestJ).prob, (*doS.begin()).prob);
                     float mx = std::max((*bestJ).prob, (*doS.begin()).prob);
 
@@ -843,23 +832,20 @@ private:
     }
 
 public:
-    explicit AveragePrecisionCalculator(double threshold) : threshold(threshold) { }
+    explicit AveragePrecisionCalculator(double _threshold) : threshold(_threshold) { }
 
     // gt_bboxes -> des
     // bboxes -> det
 
     void consumeImage(const ImageDescription &detectedObjects, const ImageDescription &desiredObjects) {
-            // Collecting IoU values
-        int tp = 0, fp = 0;
-
+        // Collecting IoU values
         std::vector<bool> visited(desiredObjects.alist.size(), false);
         std::vector<DetectedObject> bboxes{ std::begin(detectedObjects.alist), std::end(detectedObjects.alist) };
         std::sort(bboxes.begin(), bboxes.end(), SortBBoxDescend);
 
 
         for (auto&& detObj : bboxes) {
-                // Searching for the best match to this detection
-
+            // Searching for the best match to this detection
             // Searching for desired object
             float overlap_max = -1;
             int jmax = -1;
@@ -869,7 +855,7 @@ public:
             for (auto desObj = desiredObjects.alist.begin(); desObj != desiredObjects.alist.end(); desObj++, j++) {
                 double iou = DetectedObject::ioU(detObj, *desObj);
                 if (iou > overlap_max) {
-                    overlap_max = iou;
+                    overlap_max = static_cast<float>(iou);
                     jmax = j;
                     desmax = desObj;
                 }
@@ -908,8 +894,6 @@ public:
 
         std::map<int, double> res;
 
-        double AP = 0;
-        double q = 0;
         for (auto m : matches) {
             // Sorting
             std::sort(m.second.begin(), m.second.end(), SortPairDescend);
@@ -952,7 +936,7 @@ public:
                         break;
                     } else {
                         if (max_precs[j] < prec[i]) {
-                            max_precs[j] = prec[i];
+                            max_precs[j] = static_cast<float>(prec[i]);
                         }
                     }
                 }
@@ -1002,10 +986,10 @@ static UNUSED void addRectangles(unsigned char *data, size_t height, size_t widt
     for (size_t i = 0; i < detectedObjects.size(); i++) {
         int cls = detectedObjects[i].objectType % colors.size();
 
-        int xmin = detectedObjects[i].xmin * width;
-        int xmax = detectedObjects[i].xmax * width;
-        int ymin = detectedObjects[i].ymin * height;
-        int ymax = detectedObjects[i].ymax * height;
+        int xmin = static_cast<int>(detectedObjects[i].xmin * width);
+        int xmax = static_cast<int>(detectedObjects[i].xmax * width);
+        int ymin = static_cast<int>(detectedObjects[i].ymin * height);
+        int ymax = static_cast<int>(detectedObjects[i].ymax * height);
 
         size_t shift_first = ymin*width * 3;
         size_t shift_second = ymax*width * 3;
@@ -1031,64 +1015,109 @@ static UNUSED void addRectangles(unsigned char *data, size_t height, size_t widt
     }
 }
 
-#ifdef USE_OPENCV
-/**
-* @brief Sets image data stored in cv::Mat object to a given Blob object.
-* @param orig_image - given cv::Mat object with an image data.
-* @param blob - Blob object which to be filled by an image data.
-* @param batchIndex - batch index of an image inside of the blob.
-*/
-template <typename T>
-void matU8ToBlob(const cv::Mat& orig_image, InferenceEngine::Blob::Ptr& blob, int batchIndex = 0) {
-    InferenceEngine::SizeVector blobSize = blob->getTensorDesc().getDims();
-    const size_t width = blobSize[3];
-    const size_t height = blobSize[2];
-    const size_t channels = blobSize[1];
-    T* blob_data = blob->buffer().as<T*>();
-
-    cv::Mat resized_image(orig_image);
-    if (width != orig_image.size().width || height!= orig_image.size().height) {
-        cv::resize(orig_image, resized_image, cv::Size(width, height));
+inline std::size_t getTensorWidth(const InferenceEngine::TensorDesc& desc) {
+    const auto& layout = desc.getLayout();
+    const auto& dims = desc.getDims();
+    const auto& size = dims.size();
+    if ((size >= 2) &&
+        (layout == InferenceEngine::Layout::NCHW  ||
+         layout == InferenceEngine::Layout::NHWC  ||
+         layout == InferenceEngine::Layout::NCDHW ||
+         layout == InferenceEngine::Layout::NDHWC ||
+         layout == InferenceEngine::Layout::OIHW  ||
+         layout == InferenceEngine::Layout::CHW   ||
+         layout == InferenceEngine::Layout::HW)) {
+        // Regardless of layout, dimensions are stored in fixed order
+        return dims.back();
+    } else {
+        THROW_IE_EXCEPTION << "Tensor does not have width dimension";
     }
+    return 0;
+}
 
-    int batchOffset = batchIndex * width * height * channels;
+inline std::size_t getTensorHeight(const InferenceEngine::TensorDesc& desc) {
+    const auto& layout = desc.getLayout();
+    const auto& dims = desc.getDims();
+    const auto& size = dims.size();
+    if ((size >= 2) &&
+        (layout == InferenceEngine::Layout::NCHW  ||
+         layout == InferenceEngine::Layout::NHWC  ||
+         layout == InferenceEngine::Layout::NCDHW ||
+         layout == InferenceEngine::Layout::NDHWC ||
+         layout == InferenceEngine::Layout::OIHW  ||
+         layout == InferenceEngine::Layout::CHW   ||
+         layout == InferenceEngine::Layout::HW)) {
+        // Regardless of layout, dimensions are stored in fixed order
+        return dims.at(size - 2);
+    } else {
+        THROW_IE_EXCEPTION << "Tensor does not have height dimension";
+    }
+    return 0;
+}
 
-    for (size_t c = 0; c < channels; c++) {
-        for (size_t  h = 0; h < height; h++) {
-            for (size_t w = 0; w < width; w++) {
-                blob_data[batchOffset + c * width * height + h * width + w] =
-                        resized_image.at<cv::Vec3b>(h, w)[c];
-            }
+inline std::size_t getTensorChannels(const InferenceEngine::TensorDesc& desc) {
+    const auto& layout = desc.getLayout();
+    if (layout == InferenceEngine::Layout::NCHW  ||
+        layout == InferenceEngine::Layout::NHWC  ||
+        layout == InferenceEngine::Layout::NCDHW ||
+        layout == InferenceEngine::Layout::NDHWC ||
+        layout == InferenceEngine::Layout::C     ||
+        layout == InferenceEngine::Layout::CHW   ||
+        layout == InferenceEngine::Layout::NC    ||
+        layout == InferenceEngine::Layout::CN) {
+        // Regardless of layout, dimensions are stored in fixed order
+        const auto& dims = desc.getDims();
+        switch (desc.getLayoutByDims(dims)) {
+            case InferenceEngine::Layout::C:     return dims.at(0);
+            case InferenceEngine::Layout::NC:    return dims.at(1);
+            case InferenceEngine::Layout::CHW:   return dims.at(0);
+            case InferenceEngine::Layout::NCHW:  return dims.at(1);
+            case InferenceEngine::Layout::NCDHW: return dims.at(1);
+            case InferenceEngine::Layout::SCALAR:   // [[fallthrough]]
+            case InferenceEngine::Layout::BLOCKED:  // [[fallthrough]]
+            default:
+                THROW_IE_EXCEPTION << "Tensor does not have channels dimension";
         }
+    } else {
+        THROW_IE_EXCEPTION << "Tensor does not have channels dimension";
+    }
+    return 0;
+}
+
+inline std::size_t getTensorBatch(const InferenceEngine::TensorDesc& desc) {
+    const auto& layout = desc.getLayout();
+    if (layout == InferenceEngine::Layout::NCHW  ||
+        layout == InferenceEngine::Layout::NHWC  ||
+        layout == InferenceEngine::Layout::NCDHW ||
+        layout == InferenceEngine::Layout::NDHWC ||
+        layout == InferenceEngine::Layout::NC    ||
+        layout == InferenceEngine::Layout::CN) {
+        // Regardless of layout, dimensions are stored in fixed order
+        const auto& dims = desc.getDims();
+        switch (desc.getLayoutByDims(dims)) {
+            case InferenceEngine::Layout::NC:    return dims.at(0);
+            case InferenceEngine::Layout::NCHW:  return dims.at(0);
+            case InferenceEngine::Layout::NCDHW: return dims.at(0);
+            case InferenceEngine::Layout::CHW:      // [[fallthrough]]
+            case InferenceEngine::Layout::C:        // [[fallthrough]]
+            case InferenceEngine::Layout::SCALAR:   // [[fallthrough]]
+            case InferenceEngine::Layout::BLOCKED:  // [[fallthrough]]
+            default:
+                THROW_IE_EXCEPTION << "Tensor does not have channels dimension";
+        }
+    } else {
+        THROW_IE_EXCEPTION << "Tensor does not have channels dimension";
+    }
+    return 0;
+}
+
+inline void showAvailableDevices() {
+    InferenceEngine::Core ie;
+    std::vector<std::string> devices = ie.GetAvailableDevices();
+
+    std::cout << std::endl;
+    std::cout << "Available target devices:";
+    for (const auto& device : devices) {
+        std::cout << "  " << device;
     }
 }
-
-/**
- * @brief Wraps data stored inside of a passed cv::Mat object by new Blob pointer.
- * @note: No memory allocation is happened. The blob just points to already existing
- *        cv::Mat data.
- * @param mat - given cv::Mat object with an image data.
- * @return resulting Blob pointer.
- */
-static InferenceEngine::Blob::Ptr wrapMat2Blob(const cv::Mat &mat) {
-    size_t channels = mat.channels();
-    size_t height = mat.size().height;
-    size_t width = mat.size().width;
-
-    size_t strideH = mat.step.buf[0];
-    size_t strideW = mat.step.buf[1];
-
-    bool is_dense =
-            strideW == channels &&
-            strideH == channels * width;
-
-    if (!is_dense) THROW_IE_EXCEPTION
-                << "Doesn't support conversion from not dense cv::Mat";
-
-    InferenceEngine::TensorDesc tDesc(InferenceEngine::Precision::U8,
-                                      {1, channels, height, width},
-                                      InferenceEngine::Layout::NHWC);
-
-    return InferenceEngine::make_shared_blob<uint8_t>(tDesc, mat.data);
-}
-#endif

@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -14,7 +13,8 @@ using namespace mkldnn;
 using namespace MKLDNNPlugin;
 using namespace InferenceEngine;
 
-MKLDNNSoftMaxNode::MKLDNNSoftMaxNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng) : MKLDNNNode(layer, eng) {}
+MKLDNNSoftMaxNode::MKLDNNSoftMaxNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket) :
+        MKLDNNNode(layer, eng, socket) {}
 
 void MKLDNNSoftMaxNode::getSupportedDescriptors() {
     if (descs.size())
@@ -30,14 +30,19 @@ void MKLDNNSoftMaxNode::getSupportedDescriptors() {
         THROW_IE_EXCEPTION << "Cannot convert softmax layer.";
 
     if (getParentEdges().size() != 1)
-        THROW_IE_EXCEPTION << "Incorrect number of input edges.";
+        THROW_IE_EXCEPTION << "Incorrect number of input edges for layer " << getName();
     if (!getChildEdges().size())
-        THROW_IE_EXCEPTION << "Incorrect number of output edges.";
+        THROW_IE_EXCEPTION << "Incorrect number of output edges for layer " << getName();
 
     axis = smLayer->axis;
 
     if (axis >= getParentEdgeAt(0)->getDims().ndims()) {
         THROW_IE_EXCEPTION << "Incorrect axis!";
+    }
+
+    if (getParentEdgeAt(0)->getDims().ndims() == 3) {
+        MKLDNNMemoryDesc in_candidate(getParentEdgeAt(0)->getDims(), inputDataType, memory::format::blocked);
+        createDescriptor({in_candidate}, {});
     }
 
     for (auto format : getAvailableFormatsForDims(getParentEdgeAt(0)->getDims())) {
@@ -63,19 +68,20 @@ void MKLDNNSoftMaxNode::createPrimitive() {
 
     const PrimitiveDescInfo *selected_pd = getSelectedPrimitiveDescriptor();
     if (selected_pd == nullptr)
-        THROW_IE_EXCEPTION << "Preferable primitive descriptor does not set for node " << getName() << ".";
+        THROW_IE_EXCEPTION << "Preferable primitive descriptor is not set for node " << getName() << ".";
 
     auto prim_desc = softmax_forward::primitive_desc(*selected_desc_ptr, getEngine());
     primitive_desc_iterator itpd = descs[0].createPrimitiveDescriptorIterator(getEngine());
 
-    do {
+    while (itpd.is_not_end()) {
         impl_desc_type impl_type = parse_impl_name(itpd.get_impl_info_str());
         auto primitiveDescriptor = getSelectedPrimitiveDescriptor();
         if ((primitiveDescriptor != nullptr) && (impl_type == primitiveDescriptor->getImplementationType())) {
             itpd.getPrimitiveDescriptor(prim_desc);
             break;
         }
-    } while (itpd.next());
+        itpd++;
+    }
 
     prim.reset(new softmax_forward(prim_desc, getParentEdgeAt(0)->getMemory().GetPrimitive(),
                                 getChildEdgeAt(0)->getMemory().GetPrimitive()));
@@ -86,7 +92,10 @@ bool MKLDNNSoftMaxNode::created() const {
 }
 
 void MKLDNNSoftMaxNode::initOptimalPrimitiveDescriptor() {
-    auto config = getSelectedPrimitiveDescriptor()->getConfig();
+    auto selected_pd = getSelectedPrimitiveDescriptor();
+    if (selected_pd == nullptr)
+        THROW_IE_EXCEPTION << "Preferable primitive descriptor is not set.";
+    auto config = selected_pd->getConfig();
     if (isInitConfig(config))
         return;
 

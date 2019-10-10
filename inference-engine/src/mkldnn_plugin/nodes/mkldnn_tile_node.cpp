@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -13,7 +12,8 @@ using namespace mkldnn;
 using namespace MKLDNNPlugin;
 using namespace InferenceEngine;
 
-MKLDNNTileNode::MKLDNNTileNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng) : MKLDNNNode(layer, eng) {}
+MKLDNNTileNode::MKLDNNTileNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket) :
+        MKLDNNNode(layer, eng, socket) {}
 
 void MKLDNNTileNode::getSupportedDescriptors() {
     auto * tileLayer = dynamic_cast<TileLayer*>(getCnnLayer().get());
@@ -22,9 +22,9 @@ void MKLDNNTileNode::getSupportedDescriptors() {
         THROW_IE_EXCEPTION << "Cannot convert tile layer.";
 
     if (getParentEdges().size() != 1)
-        THROW_IE_EXCEPTION << "Incorrect number of input edges.";
+        THROW_IE_EXCEPTION << "Incorrect number of input edges for layer " << getName();
     if (!getChildEdges().size())
-        THROW_IE_EXCEPTION << "Incorrect number of output edges.";
+        THROW_IE_EXCEPTION << "Incorrect number of output edges for layer " << getName();
 
     axis = tileLayer->axis;
     tiles = tileLayer->tiles;
@@ -45,13 +45,19 @@ void MKLDNNTileNode::initSupportedPrimitiveDescriptors() {
 
     auto& inDims = getParentEdgeAt(0)->getDims();
     memory::format fmt = memory::format::any;
-    if (inDims.ndims() == 2) {
+    if (inDims.ndims() == 1) {
+        fmt = memory::format::x;
+    } else if (inDims.ndims() == 2) {
         fmt = memory::format::nc;
+    } else if (inDims.ndims() == 3) {
+        fmt = memory::format::tnc;
     } else if (inDims.ndims() == 4) {
         fmt = memory::format::nchw;
+    } else if (inDims.ndims() == 5) {
+        fmt = memory::format::ncdhw;
     }
     if (fmt == memory::format::any) {
-        THROW_IE_EXCEPTION << "Tile " << getName() << " supports only 2d and 4d dimensions!";
+        THROW_IE_EXCEPTION << "Tile " << getName() << " supports only 2D, 4D and 5D dimensions!";
     }
 
     InferenceEngine::LayerConfig config;
@@ -64,7 +70,7 @@ void MKLDNNTileNode::initSupportedPrimitiveDescriptors() {
     config.outConfs[0].inPlace = -1;
     config.outConfs[0].constant = false;
     config.outConfs[0].desc = MKLDNNMemoryDesc(getChildEdgeAt(0)->getDims(), outputDataType, fmt);
-    supportedPrimitiveDescriptors.push_back({config, impl_desc_type::unknown});
+    supportedPrimitiveDescriptors.push_back({config, impl_desc_type::unknown, fmt});
 }
 
 void MKLDNNTileNode::createPrimitive() {
@@ -75,9 +81,9 @@ void MKLDNNTileNode::createPrimitive() {
     if (!srcMemPtr || !srcMemPtr->GetPrimitivePtr())
         THROW_IE_EXCEPTION << "Input memory didn't allocate.";
     if (getSelectedPrimitiveDescriptor() == nullptr)
-        THROW_IE_EXCEPTION << "Preferable primitive descriptor does not set.";
+        THROW_IE_EXCEPTION << "Preferable primitive descriptor is not set.";
     if (getParentEdges().size() != 1)
-        THROW_IE_EXCEPTION << "Incorrect number of input edges.";
+        THROW_IE_EXCEPTION << "Incorrect number of input edges for layer " << getName();
 }
 
 void MKLDNNTileNode::execute(mkldnn::stream strm) {
@@ -101,14 +107,16 @@ void MKLDNNTileNode::execute(mkldnn::stream strm) {
         m_inner_dim *= batchToProcess();
     }
 
-    if (m_inner_dim == 1 && inDims.size() == 4 && m_outer_dim%8 == 0 && srcMemory.GetFormat() == memory::nChw8c) {
+    if (m_inner_dim == 1 && m_outer_dim % 8 == 0 && ((inDims.size() == 4 && srcMemory.GetFormat() == memory::nChw8c) ||
+            (inDims.size() == 5 && srcMemory.GetFormat() == memory::nCdhw8c))) {
         /*
          * We may enable tile processing directly to appropriate output format (nChw8c)
          */
         m_inner_dim *= 8;
         m_outer_dim /= 8;
-    } else if (m_inner_dim == 1 && inDims.size() == 4 && m_outer_dim%16 == 0
-               && srcMemory.GetFormat() == memory::nChw16c) {
+    } else if (m_inner_dim == 1 && m_outer_dim % 16 == 0 &&
+            ((inDims.size() == 4 && srcMemory.GetFormat() == memory::nChw16c) ||
+            (inDims.size() == 5 && srcMemory.GetFormat() == memory::nCdhw16c))) {
         /*
          * We may enable tile processing directly to appropriate output format (nChw16c)
          */

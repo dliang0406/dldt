@@ -1,9 +1,9 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #pragma once
+
 #include <string>
 #include <cpp_interfaces/interface/ie_imemory_state_internal.hpp>
 
@@ -17,7 +17,7 @@ class MemoryStateInternal : public IMemoryStateInternal {
     std::string name;
     Blob::Ptr state;
 
- public:
+public:
     explicit MemoryStateInternal(std::string name) : name(name) {
     }
     std::string GetName() const override {

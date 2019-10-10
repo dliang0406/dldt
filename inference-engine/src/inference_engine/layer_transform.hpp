@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -7,6 +6,7 @@
 
 #include <tuple>
 #include <memory>
+#include <utility>
 #include "ie_layers.h"
 
 namespace InferenceEngine {
@@ -23,10 +23,25 @@ class LayerInjector : public T {
 
 
 using AllLayers = std::tuple <
-    ConvolutionLayer *,
+    SelectLayer*,
+    DeformableConvolutionLayer*,
     DeconvolutionLayer*,
+    ConvolutionLayer *,
+    TopKLayer*,
     PoolingLayer*,
     FullyConnectedLayer*,
+    GemmLayer*,
+    PadLayer*,
+    GatherLayer*,
+    StridedSliceLayer*,
+    ShuffleChannelsLayer*,
+    DepthToSpaceLayer*,
+    SpaceToDepthLayer*,
+    SparseFillEmptyRowsLayer*,
+    ReverseSequenceLayer*,
+    RangeLayer*,
+    FillLayer*,
+    BroadcastLayer*,
     ConcatLayer*,
     SplitLayer*,
     NormLayer*,
@@ -43,12 +58,77 @@ using AllLayers = std::tuple <
     PowerLayer*,
     BatchNormalizationLayer*,
     ClampLayer*,
+    TensorIterator*,
+    LSTMCell*,
+    GRUCell*,
+    RNNCell*,
+    RNNSequenceLayer*,
+    QuantizeLayer*,
+    BinaryConvolutionLayer*,
     WeightableLayer*,
+    OneHotLayer*,
+    MathLayer*,
+    ReduceLayer*,
+    UniqueLayer*,
+    NonMaxSuppressionLayer*,
+    ScatterLayer*,
     CNNLayer*
 >;
 
+
+/**
+ * @brief checks whether type inxed as P has a parent among element in range I..N
+ * can be used only for P < I
+ * */
+template <size_t P, size_t I, class Tuple, class Enable = void >
+struct is_base_of_any;
+
+template <size_t IBase,
+          size_t IDerived,
+          class Tuple>
+struct is_base_of_any<
+    IBase, IDerived, Tuple,
+    typename std::enable_if<IBase < std::tuple_size<Tuple>::value, void>::type > : public std::true_type {
+         using base = typename std::remove_pointer<typename std::tuple_element<IBase, Tuple>::type>::type;
+         using derived = typename std::remove_pointer<typename std::tuple_element<IDerived, Tuple>::type>::type;
+
+    static_assert(IDerived < IBase, "cannot match parent using incorrect indices");
+    static_assert(!std::is_base_of<derived, base>::value, "probing type is a parent of followed type");
+
+    // check that incoming type have parents in range I..N, and any of I..N not a child of derivedd type
+     static_assert((std::is_base_of<base, derived>::value || is_base_of_any<IBase + 1, IDerived, Tuple>::value), "parent matching failed");
+};
+
+// for matches any->after last
+template <
+    size_t IBase,
+    size_t IDerived,
+    class Tuple>
+struct is_base_of_any<
+    IBase, IDerived, Tuple, typename std::enable_if<IBase >= std::tuple_size<Tuple>::value, void>::type> : public std::false_type {
+};
+
+/**
+* @brief check wether type ordered from child to base within given list
+*/
+template <size_t P, class Tuple, class Enable = void>
+struct is_types_ordered_from_child_to_base {};
+
+template <size_t P, class Tuple>
+struct is_types_ordered_from_child_to_base <P, Tuple, typename std::enable_if<P != std::tuple_size<Tuple>::value - 2, void>::type> {
+  static constexpr bool value = is_base_of_any<P + 1, P, Tuple> :: value &&  is_types_ordered_from_child_to_base<P + 1, Tuple> :: value;
+};
+
+template <size_t P, class Tuple>
+struct is_types_ordered_from_child_to_base<P, Tuple, typename std::enable_if<P == std::tuple_size<Tuple>::value - 2, void>::type> {
+  static constexpr bool value = is_base_of_any<P + 1, P, Tuple> :: value;
+};
+
+static_assert(is_types_ordered_from_child_to_base<0, AllLayers>::value,
+    "All layers must be topologically sorted as so for any layer, it's father appeared later in a types list");
+
 template<typename InjectedType, typename T>
-void dynamic_cast_layer(const CNNLayer &source, CNNLayerPtr &target, T & /*, InjectedType value*/) {
+inline void dynamic_cast_layer(const CNNLayer &source, CNNLayerPtr &target, T & /*, InjectedType value*/) {
     if (target) {
         return;
     }
@@ -63,11 +143,11 @@ void dynamic_cast_layer(const CNNLayer &source, CNNLayerPtr &target, T & /*, Inj
 
 template<class Visitor, std::size_t I = 0, typename... Tp>
 inline typename std::enable_if<I == sizeof...(Tp), void>::type
-visitActualLayer(std::tuple<Tp...> &t, const CNNLayer &sourceLayer, const Visitor & v) {}
+visitActualLayer(std::tuple<Tp...> &&t, const CNNLayer &sourceLayer, const Visitor & v) {}
 
 template<class Visitor, std::size_t I = 0, typename... Tp>
 inline typename std::enable_if < I < sizeof...(Tp), void>::type
-visitActualLayer(std::tuple<Tp...> &t, const CNNLayer &sourceLayer, const Visitor & visitor) {
+visitActualLayer(std::tuple<Tp...> &&t, const CNNLayer &sourceLayer, const Visitor & visitor) {
     using EType = typename std::tuple_element<I, std::tuple<Tp...>>::type;
     auto casted = dynamic_cast<EType>(const_cast<CNNLayer *>(&sourceLayer));
 
@@ -78,7 +158,7 @@ visitActualLayer(std::tuple<Tp...> &t, const CNNLayer &sourceLayer, const Visito
         }
     }
 
-    visitActualLayer<Visitor, I + 1, Tp...>(t, sourceLayer, visitor);
+    visitActualLayer<Visitor, I + 1, Tp...>(std::move(t), sourceLayer, visitor);
 }
 
 template<class InjectedType, std::size_t I = 0, typename... Tp>
@@ -164,8 +244,7 @@ inline CNNLayerPtr injectData(CNNLayerPtr sourceLayer, const InjectType & value 
  */
 template<class Transformer>
 inline void transformLayer(const CNNLayer & sourceLayer, const Transformer & transformer) {
-    details::AllLayers layers;
-    details::visitActualLayer<Transformer>(layers, sourceLayer, transformer);
+    details::visitActualLayer<Transformer>(std::move(details::AllLayers()), sourceLayer, transformer);
 }
 
 template<class Transformer>

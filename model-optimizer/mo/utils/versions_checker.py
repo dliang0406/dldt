@@ -1,12 +1,11 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
  You may obtain a copy of the License at
 
       http://www.apache.org/licenses/LICENSE-2.0
-
 
  Unless required by applicable law or agreed to in writing, software
  distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,13 +14,17 @@
  limitations under the License.
 """
 
+
 import logging as log
 import os
 import re
 import sys
 from distutils.version import LooseVersion
 
-modules = {"protobuf": "google.protobuf"}
+modules = {
+    "protobuf": "google.protobuf",
+    "test-generator": "generator",
+}
 critical_modules = ["networkx"]
 
 message = "\nDetected not satisfied dependencies:\n" \
@@ -41,7 +44,40 @@ def check_python_version():
         return 1
 
 
-def get_module_version_list_from_file(file_name):
+def parse_versions_list(required_fw_versions: str, version_list: list()):
+    """
+    Parsing requirements versions
+    :param required_fw_versions: String with fw versions from requirements file
+    :param version_list: List for append
+    :return: list of tuples of strings like (name_of_module, sign, version)
+
+    Returned object is:
+    [('tensorflow', '>=', '1.2.0'), ('networkx', '==', '2.1'), ('numpy', None, None)]
+    """
+
+    line = required_fw_versions.strip('\n')
+    line = line.strip(' ')
+    if line == '':
+        return []
+    splited_versions_by_conditions = re.split(r"==|>=|<=|>|<", line)
+    splited_versions_by_conditions = [l.strip(',') for l in splited_versions_by_conditions]
+
+    if len(splited_versions_by_conditions) == 0:
+        return []
+    if len(splited_versions_by_conditions) == 1:
+        version_list.append((splited_versions_by_conditions[0], None, None))
+    else:
+        splited_required_versions= re.split(r",", line)
+        for i, l in enumerate(splited_required_versions):
+            comparisons = ['==', '>=', '<=', '<', '>']
+            for comparison in comparisons:
+                if comparison in l:
+                    version_list.append((splited_versions_by_conditions[0], comparison, splited_versions_by_conditions[i + 1]))
+                    break
+    return version_list
+
+
+def get_module_version_list_from_file(file_name: str):
     """
     Please do not add parameter type annotations (param:type).
     Because we import this file while checking Python version.
@@ -62,24 +98,7 @@ def get_module_version_list_from_file(file_name):
     req_dict = list()
     with open(file_name) as f:
         for line in f:
-            line = line.strip('\n')
-            line = line.strip(' ')
-            if line == '':
-                continue
-            splited_line = re.split(r"==|>=|<=|>|<", line)
-            if len(splited_line) == 1:
-                req_dict.append((splited_line[0], None, None))
-            else:
-                if '==' in line:
-                    req_dict.append((splited_line[0], '==', splited_line[1]))
-                elif '>=' in line:
-                    req_dict.append((splited_line[0], '>=', splited_line[1]))
-                elif '<=' in line:
-                    req_dict.append((splited_line[0], '<=', splited_line[1]))
-                elif '<' in line:
-                    req_dict.append((splited_line[0], '<', splited_line[1]))
-                elif '>' in line:
-                    req_dict.append((splited_line[0], '>', splited_line[1]))
+            req_dict = parse_versions_list(line, req_dict)
     return req_dict
 
 
@@ -101,7 +120,19 @@ def version_check(name, installed_v, required_v, sign, not_satisfied_v, exit_cod
     """
     if sign is not None:
         req_ver = LooseVersion(required_v)
-        satisfied = eval('installed_v{}req_ver'.format(sign))
+        satisfied = False
+        if sign == '>':
+            satisfied = installed_v > req_ver
+        elif sign == '>=':
+            satisfied = installed_v >= req_ver
+        elif sign == '<=':
+            satisfied = installed_v <= req_ver
+        elif sign == '<':
+            satisfied = installed_v < req_ver
+        elif sign == '==':
+            satisfied = installed_v == req_ver
+        else:
+            log.error("Error during version comparison")
     else:
         satisfied = True
     if not satisfied:
@@ -111,7 +142,7 @@ def version_check(name, installed_v, required_v, sign, not_satisfied_v, exit_cod
     return exit_code
 
 
-def check_requirements(framework = None):
+def check_requirements(framework=None):
     """
     Please do not add parameter type annotations (param:type).
     Because we import this file while checking Python version.
@@ -134,12 +165,20 @@ def check_requirements(framework = None):
     exit_code = 0
     for name, key, required_version in requirements_list:
         try:
-            exec("import {}".format(modules[name] if name in modules else name))
-            installed_version = eval("{}.__version__".format(modules[name] if name in modules else name))
+            importable_name = modules.get(name, name)
+            exec("import {}".format(importable_name))
+            installed_version = sys.modules[importable_name].__version__
             exit_code = version_check(name, installed_version, required_version, key, not_satisfied_versions, exit_code)
-            exec("del {}".format(modules[name] if name in modules else name))
+            exec("del {}".format(importable_name))
         except (AttributeError, ImportError):
             not_satisfied_versions.append((name, 'not installed', 'required: {}'.format(required_version)))
+            exit_code = 1
+            continue
+        except Exception as e:
+            log.error('Error happened while importing {} module. It may happen due to unsatisfied requirements of '
+                      'that module. Please run requirements installation script once more.\n'
+                      'Details on module importing failure: {}'.format(name, e))
+            not_satisfied_versions.append((name, 'package error', 'required: {}'.format(required_version)))
             exit_code = 1
             continue
 

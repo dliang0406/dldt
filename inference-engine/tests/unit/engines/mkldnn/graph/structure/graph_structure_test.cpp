@@ -1,18 +1,16 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include <gtest/gtest.h>
-#include <gmock/gmock-spec-builders.h>
-#include "mkldnn_plugin/mkldnn_graph.h"
-#include "mock_mkldnn_primitive.hpp"
+#include "mkldnn_plugin/mkldnn_exec_network.h"
 
-#include "single_layer_common.hpp"
 #include <mkldnn_plugin/mkldnn_extension_utils.h>
 #include "tests_common.hpp"
 #include "../test_graph.hpp"
 #include <ext_list.hpp>
+#include <ie_builders.hpp>
+#include <ie_ir_reader.hpp>
 
 using namespace ::testing;
 using namespace std;
@@ -174,7 +172,7 @@ TEST_F(MKLDNNGraphStructureTests, TestNoRedundantReorders) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {9728});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {9728}, InferenceEngine::C });
     weights->allocate();
     fill_data((float *) weights->buffer(), weights->size() / sizeof(float));
     InferenceEngine::TBlob<uint8_t>::Ptr weights_ptr = InferenceEngine::TBlob<uint8_t>::Ptr(weights);
@@ -284,7 +282,7 @@ TEST_F(MKLDNNGraphStructureTests, TestRedundantReorderBeforeConvWithC_3) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {37936});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {37936}, InferenceEngine::C });
     weights->allocate();
     fill_data((float *) weights->buffer(), weights->size() / sizeof(float));
     InferenceEngine::TBlob<uint8_t>::Ptr weights_ptr = InferenceEngine::TBlob<uint8_t>::Ptr(weights);
@@ -442,7 +440,7 @@ TEST_F(MKLDNNGraphStructureTests, TestNoRedundantReordersBeforeConcat) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {2432});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {2432}, InferenceEngine::C });
     weights->allocate();
     float * data = weights->buffer();
 
@@ -512,7 +510,6 @@ TEST_F(MKLDNNGraphStructureTests, TestNoRedundantReordersBeforeConcat) {
     compare(*output, *dstOut);
 
     // Compare for batch2
-    graph = {};
     net_reader.getNetwork().setBatchSize(2);
     graph.CreateGraph(net_reader.getNetwork());
     desc = InferenceEngine::TensorDesc(InferenceEngine::Precision::FP32, {2, 3, 7, 7}, InferenceEngine::NCHW);
@@ -725,7 +722,7 @@ TEST_F(MKLDNNGraphStructureTests, TestNoRedundantReordersBeforeDWConvolution) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {288});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {288}, InferenceEngine::C });
     weights->allocate();
     fill_data((float *) weights->buffer(), weights->size() / sizeof(float));
 
@@ -813,7 +810,8 @@ TEST_F(MKLDNNGraphStructureTests, TestNoRedundantReordersBeforeDWConvolution) {
     compare(*output, *dstOut);
 }
 
-TEST_F(MKLDNNGraphStructureTests, TestNoRedundantReordersBeforeDWDeconvolution) {
+// TODO change hardcoded reference to dynamically generated
+TEST_F(MKLDNNGraphStructureTests, DISABLED_TestNoRedundantReordersBeforeDWDeconvolution) {
     std::string model = R"V0G0N(
 <net name="deconv" version="2" batch="1">
     <layers>
@@ -901,7 +899,7 @@ TEST_F(MKLDNNGraphStructureTests, TestNoRedundantReordersBeforeDWDeconvolution) 
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {5664});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {5664}, InferenceEngine::C });
     weights->allocate();
     fill_data((float *) weights->buffer(), weights->size() / sizeof(float));
 
@@ -946,31 +944,24 @@ TEST_F(MKLDNNGraphStructureTests, TestNoRedundantReordersBeforeDWDeconvolution) 
 
     graph.Infer(srcs, outputBlobs);
 
-    std::vector<float> refDst1 = {0.931f, 0.410f, 0.823f, 1.369f, 1.196f, 1.202f, 0.637f, 0.583f, 0.759f, 1.932f,
-                                  1.493f, 0.466f, 0.773f, 0.770f, 1.414f, 1.471f, 0.330f, 0.330f, 0.330f, 0.330f,
-                                  0.693f, 0.471f, -0.167f, -0.002f, 0.019f, 0.753f, 1.023f, 0.318f, 0.002f, 0.224f,
-                                  0.848f, 0.683f, 0.000f, 0.000f, 0.000f, 0.000f, 0.050f, -0.352f, -0.045f, 0.000f,
-                                  -0.303f, 0.605f, 0.754f, -0.143f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.012f,
-                                  0.298f, 0.000f, -0.066f, -0.303f, -0.318f, -0.054f, 0.322f, 0.002f, 0.050f, 0.000f,
-                                  0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f,
-                                  0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f,
-                                  0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f,
-                                  0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f,
-                                  0.328f, -0.162f, -0.765f, -0.221f, 0.422f, 0.715f, 0.726f, 0.375f, 0.000f, 0.000f,
-                                  0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, -0.744f, -0.038f, -0.109f, 0.000f,
-                                  0.583f, 0.892f, 0.039f, -0.356f, 0.000f, 0.000f, 0.000f, 0.000f, -0.514f, 0.320f,
-                                  0.193f, 0.000f, -0.785f, -0.508f, 0.160f, -0.104f, 0.473f, 0.214f, 0.129f, 0.000f,
-                                  0.000f, 0.000f, 0.000f, 0.000f, -0.299f, 0.784f, 0.953f, -0.163f, -1.160f, -0.547f,
-                                  0.401f, -0.066f, 0.275f, -0.172f, -0.683f, -0.188f, 0.384f, -0.149f, 0.151f, 0.000f,
-                                  0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f,
-                                  0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f,
-                                  0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f,
-                                  0.000f, 0.000f};
+    std::vector<float> refDst1 = {-0.042f, -0.563f, -0.150f, 0.396f, 0.224f, 0.229f, -0.335f, -0.390f, -0.213f, 0.959f, 0.520f, -0.507f,
+                                  -0.200f, -0.202f, 0.441f, 0.499f, 0.000f, 0.000f, 0.000f, 0.000f, 0.363f, 0.141f, -0.497f, -0.332f, -0.311f,
+                                  0.423f, 0.693f, -0.012f, -0.328f, -0.106f, 0.518f, 0.353f, 0.000f, 0.000f, 0.000f, 0.000f, 0.050f, -0.352f,
+                                  -0.045f, 0.000f, -0.303f, 0.605f, 0.754f, -0.143f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.012f, 0.298f, 0.000f,
+                                  -0.066f, -0.303f, -0.318f, -0.054f, 0.322f, 0.002f, 0.050f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f,
+                                  0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f,
+                                  0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f,
+                                  0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.328f, -0.162f, -0.765f, -0.221f, 0.422f, 0.715f, 0.726f, 0.375f,
+                                  0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, -0.744f, -0.038f, -0.109f, 0.000f, 0.583f, 0.892f,
+                                  0.039f, -0.356f, 0.000f, 0.000f, 0.000f, 0.000f, -0.514f, 0.320f, 0.193f, 0.000f, -0.785f, -0.508f, 0.160f, -0.104f,
+                                  0.473f, 0.214f, 0.129f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, -0.299f, 0.784f, 0.953f, -0.163f, -1.160f, -0.547f,
+                                  0.401f, -0.066f, 0.275f, -0.172f, -0.683f, -0.188f, 0.384f, -0.149f, 0.151f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f,
+                                  0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f,
+                                  0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f, 0.000f};
     InferenceEngine::TBlob<float>::Ptr dstOut1 = InferenceEngine::make_shared_blob<float>(out["deconv1"]->getTensorDesc(), refDst1.data());
 
-    std::vector<float> refDst2 = {-0.814f, -0.337f, -1.081f, 1.139f, -0.197f, 1.547f, -0.778f, -2.467f, 1.409f, -1.472f,
-                                  2.827f, 0.663f, -0.645f, 0.105f, -1.873f, -0.272f, 1.071f, 2.706f, -1.705f, 0.602f,
-                                  -1.956f, 0.734f, 2.325f, -2.147f};
+    std::vector<float> refDst2 = {-0.814f, -0.337f, -1.081f, 1.139f, -0.197f, 1.547f, -0.778f, -2.467f, 1.409f, -1.472f, 2.827f, 0.663f,
+                                  -0.645f, 0.105f, -1.873f, -0.272f, 1.071f, 2.706f, -1.705f, 0.602f, -1.956f, 0.734f, 2.325f, -2.147f};
     InferenceEngine::TBlob<float>::Ptr dstOut2 = InferenceEngine::make_shared_blob<float>(out["deconv2"]->getTensorDesc(), refDst2.data());
 
     compare(*output1, *dstOut1);
@@ -1246,7 +1237,7 @@ TEST_F(MKLDNNGraphStructureTests, TestOutputAfterInplacePlusConcat) {
 }
 
 TEST_F(MKLDNNGraphStructureTests, TestResnetPart) {
-    std::string model = R"V0G0N(
+    std::string modelB = R"V0G0N(
 <net name="ResNet-152" version="2" batch="1">
     <layers>
         <layer name="input" type="Input" precision="FP32" id="0">
@@ -1539,7 +1530,8 @@ TEST_F(MKLDNNGraphStructureTests, TestResnetPart) {
             </output>
             <weights offset="401152" size="147456"/>
             <biases offset="548608" size="256"/>
-        </layer>
+        </layer> )V0G0N";
+        std::string modelE =R"V0G0N(
         <layer name="res2b_branch2b_relu" type="ReLU" precision="FP32" id="29">
             <input>
                 <port id="58">
@@ -1714,10 +1706,11 @@ TEST_F(MKLDNNGraphStructureTests, TestResnetPart) {
 </net>
 )V0G0N";
 
+    std::string model = modelB + modelE;
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {1643424});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {1643424}, InferenceEngine::C });
     weights->allocate();
     fill_data((float *) weights->buffer(), weights->size() / sizeof(float));
     InferenceEngine::TBlob<uint8_t>::Ptr weights_ptr = InferenceEngine::TBlob<uint8_t>::Ptr(weights);
@@ -2244,7 +2237,7 @@ TEST_F(MKLDNNGraphStructureTests, TestResultsAfterGroupedConvWithStrides) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {3552});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {3552}, InferenceEngine::C });
     weights->allocate();
     float * data = weights->buffer();
     fill_data((float *) weights->buffer(), weights->size() / sizeof(float));
@@ -2276,7 +2269,6 @@ TEST_F(MKLDNNGraphStructureTests, TestResultsAfterGroupedConvWithStrides) {
     graph.Infer(srcs, outputBlobs);
 
     // Compare for batch2
-    graph = {};
     net_reader.getNetwork().setBatchSize(2);
     graph.CreateGraph(net_reader.getNetwork());
     desc = InferenceEngine::TensorDesc(InferenceEngine::Precision::FP32, {2, 24, 80, 80}, InferenceEngine::NCHW);
@@ -2380,7 +2372,7 @@ TEST_F(MKLDNNGraphStructureTests, TestLoadTopologyWithConstLayer) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {6400});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {6400}, InferenceEngine::C });
     weights->allocate();
     float * data = weights->buffer();
     fill_data((float *) weights->buffer(), weights->size() / sizeof(float));
@@ -2523,7 +2515,7 @@ TEST_F(MKLDNNGraphStructureTests, TestLoadTopologyWithEltwiseBeforeConcat) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {6400});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {6400}, InferenceEngine::C });
     weights->allocate();
     float * data = weights->buffer();
     for (size_t i = 0; i < 1200; i++) {
@@ -2999,7 +2991,7 @@ TEST_F(MKLDNNGraphStructureTests, TestNoRedundantReordersRmnet_SSSSD) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {8664});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {8664}, InferenceEngine::C });
     weights->allocate();
     fill_data((float *) weights->buffer(), weights->size() / sizeof(float));
     InferenceEngine::TBlob<uint8_t>::Ptr weights_ptr = InferenceEngine::TBlob<uint8_t>::Ptr(weights);
@@ -3009,23 +3001,16 @@ TEST_F(MKLDNNGraphStructureTests, TestNoRedundantReordersRmnet_SSSSD) {
     MKLDNNGraphTestClass graph;
     graph.CreateGraph(net_reader.getNetwork());
 
-    bool isAvx512 = false;
-
     size_t reorders_num = 0;
     auto& nodes = graph.getNodes();
     for (auto &node : nodes) {
         if (node->getType() == MKLDNNPlugin::Reorder) {
             reorders_num++;
-            if (!isAvx512 && node->getChildEdgeAt(0)->getMemory().GetFormat() == memory::nChw16c)
-                isAvx512 = true;
-            if (!isAvx512)
             ASSERT_EQ(MKLDNNPlugin::Output, node->getChildEdgeAt(0)->getChild()->getType());
         }
     }
-    if (!isAvx512)
-        ASSERT_EQ(reorders_num, 1);
-    else
-        ASSERT_EQ(reorders_num, 3);
+
+    ASSERT_EQ(reorders_num, 1);
 }
 
 TEST_F(MKLDNNGraphStructureTests, TestFailedPartDPN92) {
@@ -3239,7 +3224,7 @@ TEST_F(MKLDNNGraphStructureTests, TestFailedPartDPN92) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {33792});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {33792}, InferenceEngine::C });
     weights->allocate();
     fill_data((float *) weights->buffer(), weights->size() / sizeof(float));
 
@@ -3284,7 +3269,6 @@ TEST_F(MKLDNNGraphStructureTests, TestFailedPartDPN92) {
     }
 
     // Compare for batch2
-    graph = {};
     net_reader.getNetwork().setBatchSize(2);
     graph.CreateGraph(net_reader.getNetwork());
     desc = InferenceEngine::TensorDesc(InferenceEngine::Precision::FP32, {2, 32, 14, 14}, InferenceEngine::NCHW);
@@ -3807,13 +3791,12 @@ TEST_F(MKLDNNGraphStructureTests, TestNoRedundantReordersForXceptionTopology) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {758272});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {758272}, InferenceEngine::C });
     weights->allocate();
     fill_data((float *) weights->buffer(), weights->size() / sizeof(float));
     InferenceEngine::TBlob<uint8_t>::Ptr weights_ptr = InferenceEngine::TBlob<uint8_t>::Ptr(weights);
 
     net_reader.SetWeights(weights_ptr);
-
 
     MKLDNNGraphTestClass graph;
     graph.CreateGraph(net_reader.getNetwork());
@@ -3831,7 +3814,7 @@ TEST_F(MKLDNNGraphStructureTests, TestNoRedundantReordersForXceptionTopology) {
 
 TEST_F(MKLDNNGraphStructureTests, TestNoRedundantReordersForGrayscaleInput) {
     std::string model = R"V0G0N(
-<net batch="1" name="xception" version="2">
+<net batch="1" name="xception" version="4">
 	<layers>
 		<layer id="1" name="data" precision="FP32" type="Input">
 			<output>
@@ -3844,7 +3827,7 @@ TEST_F(MKLDNNGraphStructureTests, TestNoRedundantReordersForGrayscaleInput) {
 			</output>
 		</layer>
 		<layer id="2" name="conv1" precision="FP32" type="Convolution">
-			<data dilation-x="1" dilation-y="1" group="1" kernel-x="3" kernel-y="3" output="32" pad-x="0" pad-y="0" stride-x="1" stride-y="1"/>
+			<data auto_pad="same_upper" dilations="1,1" group="1" kernel="3,3" output="32" pads_begin="0,0" pads_end="2,2" strides="1,1"/>
 			<input>
 				<port id="2">
 					<dim>1</dim>
@@ -3876,7 +3859,7 @@ TEST_F(MKLDNNGraphStructureTests, TestNoRedundantReordersForGrayscaleInput) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {1280});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {1280}, InferenceEngine::C });
     weights->allocate();
     fill_data((float *) weights->buffer(), weights->size() / sizeof(float));
     InferenceEngine::TBlob<uint8_t>::Ptr weights_ptr = InferenceEngine::TBlob<uint8_t>::Ptr(weights);
@@ -4050,7 +4033,7 @@ TEST_F(MKLDNNGraphStructureTests, TestFailedPartPlateRecognitionBarrier0001) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {3672348});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {3672348}, InferenceEngine::C });
     weights->allocate();
     fill_data((float *) weights->buffer(), weights->size() / sizeof(float));
 
@@ -4088,7 +4071,6 @@ TEST_F(MKLDNNGraphStructureTests, TestFailedPartPlateRecognitionBarrier0001) {
     }
 
     // Compare for batch2
-    graph = {};
     net_reader.getNetwork().setBatchSize(2);
     graph.CreateGraph(net_reader.getNetwork());
     desc = InferenceEngine::TensorDesc(InferenceEngine::Precision::FP32, {2, 128, 1, 88}, InferenceEngine::NCHW);
@@ -4230,7 +4212,7 @@ TEST_F(MKLDNNGraphStructureTests, TestFailedVNect0001) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::FP32, InferenceEngine::C, { 1032192 });
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::FP32, { 1032192 }, InferenceEngine::C });
     weights->allocate();
     fill_data((float *)weights->buffer(), weights->size() / sizeof(float));
 
@@ -4326,7 +4308,7 @@ TEST_F(MKLDNNGraphStructureTests, TestFailedVNect0002) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::FP32, InferenceEngine::C, { 43008 });
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::FP32, { 43008 }, InferenceEngine::C });
     weights->allocate();
     fill_data((float *)weights->buffer(), weights->size() / sizeof(float));
 
@@ -4341,10 +4323,10 @@ TEST_F(MKLDNNGraphStructureTests, TestFailedVNect0002) {
     auto& nodes = graph.getNodes();
     for (auto &node : nodes) {
         if ( node->getType() == MKLDNNPlugin::Output &&
-             (node->getName() == "out_slice_heatmaps.1" ||
+             (node->getName() == "out_slice_heatmaps.0" ||
+              node->getName() == "out_slice_heatmaps.1" ||
               node->getName() == "out_slice_heatmaps.2" ||
-              node->getName() == "out_slice_heatmaps.3" ||
-              node->getName() == "out_slice_heatmaps.4" ) ) {
+              node->getName() == "out_slice_heatmaps.3" ) ) {
             outputs_num++;
         }
     }
@@ -4520,7 +4502,7 @@ TEST_F(MKLDNNGraphStructureTests, TestFailedVNect0003) {
 
 TEST_F(MKLDNNGraphStructureTests, TestConvolutionDWConvolutionSumFusing) {
     std::string model = R"V0G0N(
-<net name="net" version="2" batch="1">
+<net name="net" version="4" batch="1">
     <layers>
         <layer name="data0" type="Input" precision="FP32" id="0">
             <output>
@@ -4543,7 +4525,7 @@ TEST_F(MKLDNNGraphStructureTests, TestConvolutionDWConvolutionSumFusing) {
             </output>
         </layer>
         <layer name="conv0" type="Convolution" precision="FP32" id="2">
-            <convolution_data stride-x="1" stride-y="1" pad-x="0" pad-y="0" kernel-x="1" kernel-y="1" output="48" group="1"/>
+			<data auto_pad="same_upper" dilations="1,1" group="1" kernel="1,1" output="48" pads_end="0, 0" pads_begin="150,300" strides="1,1"/>
             <input>
                 <port id="0">
                     <dim>1</dim>
@@ -4564,7 +4546,7 @@ TEST_F(MKLDNNGraphStructureTests, TestConvolutionDWConvolutionSumFusing) {
             <biases offset="6144" size="192"/>
         </layer>
         <layer name="conv1" type="Convolution" precision="FP32" id="3">
-            <convolution_data stride-x="2" stride-y="2" pad-x="1" pad-y="1" kernel-x="3" kernel-y="3" output="48" group="48"/>
+			<data auto_pad="same_upper" dilations="1,1" group="48" kernel="3,3" output="48" pads_end="1,1" pads_begin="1,1" strides="2,2"/>
             <input>
                 <port id="0">
                     <dim>1</dim>
@@ -4585,7 +4567,7 @@ TEST_F(MKLDNNGraphStructureTests, TestConvolutionDWConvolutionSumFusing) {
             <biases offset="7872" size="192"/>
         </layer>
         <layer name="eltwise" type="Eltwise" precision="FP32" id="4">
-            <elementwise_data operation="sum"/>
+            <data operation="sum"/>
             <input>
                 <port id="0">
                     <dim>1</dim>
@@ -4628,7 +4610,7 @@ TEST_F(MKLDNNGraphStructureTests, TestConvolutionDWConvolutionSumFusing) {
             </output>
         </layer>
         <layer name="power" type="Power" precision="FP32" id="6">
-            <power_data power="1" scale="-1" shift="0"/>
+            <data power="1" scale="-1" shift="0"/>
             <input>
                 <port id="0">
                     <dim>1</dim>
@@ -4661,7 +4643,7 @@ TEST_F(MKLDNNGraphStructureTests, TestConvolutionDWConvolutionSumFusing) {
     InferenceEngine::CNNNetReader net_reader;
     net_reader.ReadNetwork(model.data(), model.length());
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {8064});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {8064}, InferenceEngine::C });
     weights->allocate();
     float * data = weights->buffer();
     memset((float *) weights->buffer(), 0, weights->size());
@@ -4811,7 +4793,7 @@ TEST_F(MKLDNNGraphStructureTests, TestConstantLayerAsOutput) {
     InferenceEngine::CNNNetReader net_reader;
     ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {37912});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {37912}, InferenceEngine::C });
     weights->allocate();
     fill_data((float *) weights->buffer(), weights->size() / sizeof(float));
 
@@ -4819,9 +4801,9 @@ TEST_F(MKLDNNGraphStructureTests, TestConstantLayerAsOutput) {
 
     net_reader.SetWeights(weights_ptr);
 
-    std::shared_ptr<InferenceEngine::IExtension> cpuExt(new InferenceEngine::Extensions::Cpu::CpuExtensions());
+    InferenceEngine::Extension cpuExt(make_so_name("cpu_extension"));
     MKLDNNPlugin::MKLDNNExtensionManager::Ptr extMgr(new MKLDNNPlugin::MKLDNNExtensionManager());
-    extMgr->AddExtension(cpuExt);
+    extMgr->AddExtension(InferenceEngine::IExtensionPtr(&cpuExt, [](InferenceEngine::IExtension*){}));
 
     MKLDNNGraphTestClass graph;
     graph.CreateGraph(net_reader.getNetwork(), extMgr);
@@ -4923,7 +4905,7 @@ TEST_F(MKLDNNGraphStructureTests, TestConstantLayerAsOutput) {
 
 TEST_F(MKLDNNGraphStructureTests, TestGemmConvolutionWithConcat) {
     std::string model = R"V0G0N(
-<net batch="1" name="squeezenet1.1" version="2">
+<net batch="1" name="squeezenet1.1" version="3">
 	<layers>
 		<layer id="0" name="data" precision="FP32" type="Input">
 			<output>
@@ -4936,7 +4918,7 @@ TEST_F(MKLDNNGraphStructureTests, TestGemmConvolutionWithConcat) {
 			</output>
 		</layer>
 		<layer id="1" name="conv1" precision="FP32" type="Convolution">
-			<data dilation-x="1" dilation-y="1" group="1" kernel-x="3" kernel-y="3" output="64" pad-b="0" pad-r="0" pad-x="0" pad-y="0" stride="1,1,2,2" stride-x="2" stride-y="2"/>
+			<data dilations="1,1" group="1" kernel="3,3" output="64" pads_begin="0,0" pads_end="0,0" strides="2,2"/>
 			<input>
 				<port id="0">
 					<dim>1</dim>
@@ -4978,7 +4960,7 @@ TEST_F(MKLDNNGraphStructureTests, TestGemmConvolutionWithConcat) {
 			</output>
 		</layer>
 		<layer id="3" name="pool1" precision="FP32" type="Pooling">
-			<data exclude-pad="false" kernel-x="3" kernel-y="3" pad-b="0" pad-r="0" pad-x="0" pad-y="0" pool-method="max" rounding_type="ceil" stride="1,1,2,2" stride-x="2" stride-y="2"/>
+			<data exclude-pad="false" kernel="3,3" pads_begin="0,0" pads_end="0,0" pool-method="max" rounding_type="ceil" strides="2,2"/>
 			<input>
 				<port id="0">
 					<dim>1</dim>
@@ -4997,7 +4979,7 @@ TEST_F(MKLDNNGraphStructureTests, TestGemmConvolutionWithConcat) {
 			</output>
 		</layer>
 		<layer id="4" name="fire2/squeeze1x1" precision="FP32" type="Convolution">
-			<data dilation-x="1" dilation-y="1" group="1" kernel-x="1" kernel-y="1" output="16" pad-b="0" pad-r="0" pad-x="0" pad-y="0" stride="1,1,1,1" stride-x="1" stride-y="1"/>
+			<data dilation="1,1" group="1" kernel="1,1" output="16" pads_begin="0,0" pads_end="0,0" strides="1,1"/>
 			<input>
 				<port id="0">
 					<dim>1</dim>
@@ -5039,7 +5021,7 @@ TEST_F(MKLDNNGraphStructureTests, TestGemmConvolutionWithConcat) {
 			</output>
 		</layer>
 		<layer id="6" name="fire2/expand1x1" precision="FP32" type="Convolution">
-			<data dilation-x="1" dilation-y="1" group="1" kernel-x="1" kernel-y="1" output="64" pad-b="0" pad-r="0" pad-x="0" pad-y="0" stride="1,1,1,1" stride-x="1" stride-y="1"/>
+			<data dilation="1,1" group="1" kernel="1,1" output="64" pads_begin="0,0" pads_end="0,0" strides="1,1"/>
 			<input>
 				<port id="0">
 					<dim>1</dim>
@@ -5081,7 +5063,7 @@ TEST_F(MKLDNNGraphStructureTests, TestGemmConvolutionWithConcat) {
 			</output>
 		</layer>
 		<layer id="8" name="fire2/expand3x3" precision="FP32" type="Convolution">
-			<data dilation-x="1" dilation-y="1" group="1" kernel-x="3" kernel-y="3" output="64" pad-b="1" pad-r="1" pad-x="1" pad-y="1" stride="1,1,1,1" stride-x="1" stride-y="1"/>
+			<data dilation="1,1" group="1" kernel="3,3" output="64" pads_begin="1,1" pads_end="1,1" strides="1,1"/>
 			<input>
 				<port id="0">
 					<dim>1</dim>
@@ -5167,7 +5149,7 @@ TEST_F(MKLDNNGraphStructureTests, TestGemmConvolutionWithConcat) {
     InferenceEngine::CNNNetReader net_reader;
     net_reader.ReadNetwork(model.data(), model.length());
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {52800});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {52800}, InferenceEngine::C });
     weights->allocate();
     fill_data((float *) weights->buffer(), weights->size() / sizeof(float));
     InferenceEngine::TBlob<uint8_t>::Ptr weights_ptr = InferenceEngine::TBlob<uint8_t>::Ptr(weights);
@@ -5268,7 +5250,7 @@ TEST_F(MKLDNNGraphStructureTests, TestGemmConvolutionWithConcat) {
 
 TEST_F(MKLDNNGraphStructureTests, TestRefPoolingWithConcat) {
     std::string model = R"V0G0N(
-<net batch="1" name="squeezenet1.1" version="2">
+<net batch="1" name="squeezenet1.1" version="3">
 	<layers>
 		<layer id="0" name="data" precision="FP32" type="Input">
 			<output>
@@ -5281,7 +5263,7 @@ TEST_F(MKLDNNGraphStructureTests, TestRefPoolingWithConcat) {
 			</output>
 		</layer>
 		<layer id="1" name="conv1" precision="FP32" type="Convolution">
-			<data dilation-x="1" dilation-y="1" group="1" kernel-x="3" kernel-y="3" output="64" pad-b="0" pad-r="0" pad-x="0" pad-y="0" stride="1,1,2,2" stride-x="2" stride-y="2"/>
+			<data dilation="1,1" group="1" kernel="3,3" output="64" pads_begin="0,0" pads_end="0,0" strides="2,2"/>
 			<input>
 				<port id="0">
 					<dim>1</dim>
@@ -5323,7 +5305,7 @@ TEST_F(MKLDNNGraphStructureTests, TestRefPoolingWithConcat) {
 			</output>
 		</layer>
 		<layer id="3" name="pool1" precision="FP32" type="Pooling">
-			<data exclude-pad="false" kernel-x="3" kernel-y="3" pad-b="0" pad-r="0" pad-x="0" pad-y="0" pool-method="max" rounding_type="ceil" stride="1,1,2,2" stride-x="2" stride-y="2"/>
+			<data exclude-pad="false" kernel="3,3" pads_begin="0,0" pads_end="0,0" pool-method="max" rounding_type="ceil" strides="2,2"/>
 			<input>
 				<port id="0">
 					<dim>1</dim>
@@ -5342,7 +5324,7 @@ TEST_F(MKLDNNGraphStructureTests, TestRefPoolingWithConcat) {
 			</output>
 		</layer>
 		<layer id="4" name="fire2/squeeze1x1" precision="FP32" type="Convolution">
-			<data dilation-x="1" dilation-y="1" group="1" kernel-x="1" kernel-y="1" output="16" pad-b="0" pad-r="0" pad-x="0" pad-y="0" stride="1,1,1,1" stride-x="1" stride-y="1"/>
+			<data dilation="1,1" group="1" kernel="1,1" output="16" pads_begin="0,0" pads_end="0,0" strides="1,1"/>
 			<input>
 				<port id="0">
 					<dim>1</dim>
@@ -5384,7 +5366,7 @@ TEST_F(MKLDNNGraphStructureTests, TestRefPoolingWithConcat) {
 			</output>
 		</layer>
 		<layer id="6" name="fire2/expand1x1" precision="FP32" type="Convolution">
-			<data dilation-x="1" dilation-y="1" group="1" kernel-x="1" kernel-y="1" output="64" pad-b="0" pad-r="0" pad-x="0" pad-y="0" stride="1,1,1,1" stride-x="1" stride-y="1"/>
+			<data dilation="1,1" group="1" kernel="1,1" output="64" pads_begin="0,0" pads_end="0,0" strides="1,1"/>
 			<input>
 				<port id="0">
 					<dim>1</dim>
@@ -5426,7 +5408,7 @@ TEST_F(MKLDNNGraphStructureTests, TestRefPoolingWithConcat) {
 			</output>
 		</layer>
 		<layer id="8" name="fire2/expand3x3" precision="FP32" type="Pooling">
-			<data exclude-pad="false" kernel-x="3" kernel-y="3" pad-x="1" pad-y="1" pool-method="avg" rounding_type="ceil" stride="1,1,1,1" stride-x="1" stride-y="1"/>
+			<data exclude-pad="false" kernel="3,3" pads_begin="1,1" pool-method="avg" rounding_type="ceil" stride="1,1"/>
 			<input>
 				<port id="0">
 					<dim>1</dim>
@@ -5492,7 +5474,7 @@ TEST_F(MKLDNNGraphStructureTests, TestRefPoolingWithConcat) {
     InferenceEngine::CNNNetReader net_reader;
     net_reader.ReadNetwork(model.data(), model.length());
 
-    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>(InferenceEngine::Precision::U8, InferenceEngine::C, {52800});
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {52800}, InferenceEngine::C });
     weights->allocate();
     fill_data((float *) weights->buffer(), weights->size() / sizeof(float));
     InferenceEngine::TBlob<uint8_t>::Ptr weights_ptr = InferenceEngine::TBlob<uint8_t>::Ptr(weights);
@@ -5579,4 +5561,1254 @@ TEST_F(MKLDNNGraphStructureTests, TestRefPoolingWithConcat) {
 
     graphInfer(net_reader.getNetwork(), inputBlobs, outputBlobs2, "cpu:ref_any");
     compare(*outputBlobs1.begin()->second, *outputBlobs2.begin()->second);
+}
+
+TEST_F(MKLDNNGraphStructureTests, TestConvolutionWith2DepthwiseOpFusing) {
+    std::string model = R"V0G0N(
+<net name="net" version="2" batch="1">
+    <layers>
+        <layer name="data" type="Input" precision="FP32" id="0">
+            <output>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>32</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </output>
+        </layer>
+        <layer name="conv" type="Convolution" precision="FP32" id="1">
+            <convolution_data stride-x="1" stride-y="1" pad-x="0" pad-y="0" kernel-x="1" kernel-y="1" output="48" group="1"/>
+            <input>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>32</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </input>
+            <output>
+                <port id="1">
+                    <dim>1</dim>
+                    <dim>48</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </output>
+            <weights offset="0" size="6144"/>
+            <biases offset="6144" size="192"/>
+        </layer>
+        <layer name="depthwise0" type="PReLU" precision="FP32" id="2">
+            <data channel_shared="1"/>
+            <input>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>48</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </input>
+            <output>
+                <port id="1">
+                    <dim>1</dim>
+                    <dim>48</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </output>
+            <weights offset="6336" size="4"/>
+        </layer>
+        <layer name="depthwise1" type="ScaleShift" precision="FP32" id="3">
+            <input>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>48</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </input>
+            <output>
+                <port id="1">
+                    <dim>1</dim>
+                    <dim>48</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </output>
+            <weights offset="6340" size="192"/>
+            <biases offset="6532" size="192"/>
+        </layer>
+    </layers>
+    <edges>
+        <edge from-layer="0" from-port="0" to-layer="1" to-port="0"/>
+        <edge from-layer="1" from-port="1" to-layer="2" to-port="0"/>
+        <edge from-layer="2" from-port="1" to-layer="3" to-port="0"/>
+    </edges>
+</net>
+)V0G0N";
+
+    InferenceEngine::CNNNetReader net_reader;
+    net_reader.ReadNetwork(model.data(), model.length());
+
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {6724}, InferenceEngine::C });
+    weights->allocate();
+    float* wdata = weights->buffer();
+
+    for (int i = 0; i < weights->size() / sizeof(float); i++)
+        wdata[i] = 1;
+    wdata[1584] = 2; // 2 for prelu weights
+
+    InferenceEngine::TBlob<uint8_t>::Ptr weights_ptr = InferenceEngine::TBlob<uint8_t>::Ptr(weights);
+
+    net_reader.SetWeights(weights_ptr);
+
+    MKLDNNGraphTestClass graph;
+    graph.CreateGraph(net_reader.getNetwork());
+
+    const auto& nodes = graph.getNodes();
+    ASSERT_EQ(nodes.size(), 5);
+    ASSERT_EQ(nodes[0].get()->getType(), MKLDNNPlugin::Type::Input);
+    ASSERT_EQ(nodes[1].get()->getType(), MKLDNNPlugin::Type::Reorder);
+    ASSERT_EQ(nodes[2].get()->getType(), MKLDNNPlugin::Type::Convolution);
+    ASSERT_TRUE(nodes[2].get()->isFusedWith(MKLDNNPlugin::Type::Depthwise));
+    ASSERT_EQ(nodes[3].get()->getType(), MKLDNNPlugin::Type::Reorder);
+    ASSERT_EQ(nodes[4].get()->getType(), MKLDNNPlugin::Type::Output);
+
+    InferenceEngine::TensorDesc src_desc(InferenceEngine::Precision::FP32, {1, 32, 300, 600}, InferenceEngine::NCHW);
+    InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float>(src_desc);
+    src->allocate();
+    float* sdata = src->buffer().as<float *>();
+    for (size_t i = 0; i < src->size(); i++) {
+        sdata[i] = -1;
+    }
+
+    std::vector<float> refDst(1 * 48 * 300 * 600);
+    for (size_t i = 0; i < refDst.size(); i++) {
+        refDst[i] = -61; // (-32 + 1) * 2 * 1 + 1
+    }
+
+    InferenceEngine::BlobMap srcs;
+    srcs.insert(std::pair<std::string, InferenceEngine::Blob::Ptr>("data", src));
+
+    InferenceEngine::OutputsDataMap out = net_reader.getNetwork().getOutputsInfo();
+
+    InferenceEngine::BlobMap outputBlobs;
+    std::pair<std::string, InferenceEngine::DataPtr> item = *out.begin();
+
+    InferenceEngine::TBlob<float>::Ptr output;
+    output = InferenceEngine::make_shared_blob<float>(item.second->getTensorDesc());
+    output->allocate();
+    outputBlobs[item.first] = output;
+
+    graph.Infer(srcs, outputBlobs);
+
+    InferenceEngine::TBlob<float>::Ptr dstOut = InferenceEngine::make_shared_blob<float>(item.second->getTensorDesc(), refDst.data());
+
+    compare(*output, *dstOut);
+}
+
+TEST_F(MKLDNNGraphStructureTests, TestConvolutionWith2EltwiseOpFusing) {
+    std::string model = R"V0G0N(
+<net name="net" version="2" batch="1">
+    <layers>
+        <layer name="data" type="Input" precision="FP32" id="0">
+            <output>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>1</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </output>
+        </layer>
+        <layer name="conv" type="Convolution" precision="FP32" id="1">
+            <convolution_data stride-x="1" stride-y="1" pad-x="0" pad-y="0" kernel-x="1" kernel-y="1" output="48" group="1"/>
+            <input>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>1</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </input>
+            <output>
+                <port id="1">
+                    <dim>1</dim>
+                    <dim>48</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </output>
+            <weights offset="0" size="192"/>
+            <biases offset="192" size="192"/>
+        </layer>
+        <layer name="eltwise0" type="Logistic" precision="FP32" id="2">
+            <input>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>48</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </input>
+            <output>
+                <port id="1">
+                    <dim>1</dim>
+                    <dim>48</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </output>
+        </layer>
+        <layer name="eltwise1" type="Clamp" precision="FP32" id="3">
+            <data max="1" min="0.3"/>
+            <input>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>48</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </input>
+            <output>
+                <port id="1">
+                    <dim>1</dim>
+                    <dim>48</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </output>
+        </layer>
+    </layers>
+    <edges>
+        <edge from-layer="0" from-port="0" to-layer="1" to-port="0"/>
+        <edge from-layer="1" from-port="1" to-layer="2" to-port="0"/>
+        <edge from-layer="2" from-port="1" to-layer="3" to-port="0"/>
+    </edges>
+</net>
+)V0G0N";
+
+    InferenceEngine::CNNNetReader net_reader;
+    net_reader.ReadNetwork(model.data(), model.length());
+
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {384}, InferenceEngine::C });
+    weights->allocate();
+    float* wdata = weights->buffer();
+
+    for (int i = 0; i < weights->size() / sizeof(float); i++)
+        wdata[i] = 1;
+
+    InferenceEngine::TBlob<uint8_t>::Ptr weights_ptr = InferenceEngine::TBlob<uint8_t>::Ptr(weights);
+
+    net_reader.SetWeights(weights_ptr);
+
+    MKLDNNGraphTestClass graph;
+    graph.CreateGraph(net_reader.getNetwork());
+
+    const auto& nodes = graph.getNodes();
+    ASSERT_EQ(nodes.size(), 4);
+    ASSERT_EQ(nodes[0].get()->getType(), MKLDNNPlugin::Type::Input);
+    ASSERT_EQ(nodes[1].get()->getType(), MKLDNNPlugin::Type::Convolution);
+    ASSERT_TRUE(nodes[1].get()->isFusedWith(MKLDNNPlugin::Type::Activation));
+    ASSERT_EQ(nodes[2].get()->getType(), MKLDNNPlugin::Type::Reorder);
+    ASSERT_EQ(nodes[3].get()->getType(), MKLDNNPlugin::Type::Output);
+
+    InferenceEngine::TensorDesc src_desc(InferenceEngine::Precision::FP32, {1, 1, 300, 600}, InferenceEngine::NCHW);
+    InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float>(src_desc);
+    src->allocate();
+    float* sdata = src->buffer().as<float *>();
+    for (size_t i = 0; i < src->size(); i++) {
+        sdata[i] = i % 2 == 0 ? 2 : -2;
+    }
+
+    std::vector<float> refDst(1 * 48 * 300 * 600);
+    for (size_t i = 0; i < refDst.size(); i++) {
+        refDst[i] = i % 2 == 0 ? 0.952574127f : 0.3f;
+    }
+
+    InferenceEngine::BlobMap srcs;
+    srcs.insert(std::pair<std::string, InferenceEngine::Blob::Ptr>("data", src));
+
+    InferenceEngine::OutputsDataMap out = net_reader.getNetwork().getOutputsInfo();
+
+    InferenceEngine::BlobMap outputBlobs;
+    std::pair<std::string, InferenceEngine::DataPtr> item = *out.begin();
+
+    InferenceEngine::TBlob<float>::Ptr output;
+    output = InferenceEngine::make_shared_blob<float>(item.second->getTensorDesc());
+    output->allocate();
+    outputBlobs[item.first] = output;
+
+    graph.Infer(srcs, outputBlobs);
+
+    InferenceEngine::TBlob<float>::Ptr dstOut = InferenceEngine::make_shared_blob<float>(item.second->getTensorDesc(), refDst.data());
+
+    compare(*output, *dstOut);
+}
+
+TEST_F(MKLDNNGraphStructureTests, TestGemmConvolutionWith2DepthwiseOpFusing) {
+    std::string model = R"V0G0N(
+<net name="net" version="2" batch="1">
+    <layers>
+        <layer name="data" type="Input" precision="FP32" id="0">
+            <output>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>8</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </output>
+        </layer>
+        <layer name="conv" type="Convolution" precision="FP32" id="1">
+            <convolution_data stride-x="1" stride-y="1" pad-x="0" pad-y="0" kernel-x="1" kernel-y="1" output="8" group="2"/>
+            <input>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>8</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </input>
+            <output>
+                <port id="1">
+                    <dim>1</dim>
+                    <dim>8</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </output>
+            <weights offset="0" size="128"/>
+            <biases offset="128" size="32"/>
+        </layer>
+        <layer name="depthwise0" type="PReLU" precision="FP32" id="2">
+            <data channel_shared="1"/>
+            <input>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>8</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </input>
+            <output>
+                <port id="1">
+                    <dim>1</dim>
+                    <dim>8</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </output>
+            <weights offset="160" size="4"/>
+        </layer>
+        <layer name="depthwise1" type="ScaleShift" precision="FP32" id="3">
+            <input>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>8</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </input>
+            <output>
+                <port id="1">
+                    <dim>1</dim>
+                    <dim>8</dim>
+                    <dim>300</dim>
+                    <dim>600</dim>
+                </port>
+            </output>
+            <weights offset="164" size="32"/>
+            <biases offset="196" size="32"/>
+        </layer>
+    </layers>
+    <edges>
+        <edge from-layer="0" from-port="0" to-layer="1" to-port="0"/>
+        <edge from-layer="1" from-port="1" to-layer="2" to-port="0"/>
+        <edge from-layer="2" from-port="1" to-layer="3" to-port="0"/>
+    </edges>
+</net>
+)V0G0N";
+
+    InferenceEngine::CNNNetReader net_reader;
+    net_reader.ReadNetwork(model.data(), model.length());
+
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, {228}, InferenceEngine::C });
+    weights->allocate();
+    float* wdata = weights->buffer();
+
+    for (int i = 0; i < weights->size() / sizeof(float); i++)
+        wdata[i] = 1;
+    wdata[40] = 2; // 2 for prelu weights
+
+    InferenceEngine::TBlob<uint8_t>::Ptr weights_ptr = InferenceEngine::TBlob<uint8_t>::Ptr(weights);
+
+    net_reader.SetWeights(weights_ptr);
+
+    MKLDNNGraphTestClass graph;
+    graph.CreateGraph(net_reader.getNetwork());
+
+    const auto& nodes = graph.getNodes();
+    ASSERT_EQ(nodes.size(), 3);
+    ASSERT_EQ(nodes[0].get()->getType(), MKLDNNPlugin::Type::Input);
+    ASSERT_EQ(nodes[1].get()->getType(), MKLDNNPlugin::Type::Convolution);
+    ASSERT_TRUE(nodes[1].get()->isFusedWith(MKLDNNPlugin::Type::Depthwise));
+    ASSERT_EQ(nodes[2].get()->getType(), MKLDNNPlugin::Type::Output);
+
+    InferenceEngine::TensorDesc src_desc(InferenceEngine::Precision::FP32, {1, 8, 300, 600}, InferenceEngine::NCHW);
+    InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float>(src_desc);
+    src->allocate();
+    float* sdata = src->buffer().as<float *>();
+    for (size_t i = 0; i < src->size(); i++) {
+        sdata[i] = -1;
+    }
+
+    std::vector<float> refDst(1 * 8 * 300 * 600);
+    for (size_t i = 0; i < refDst.size(); i++) {
+        refDst[i] = -5; // (-4 + 1) * 2 * 1 + 1
+    }
+
+    InferenceEngine::BlobMap srcs;
+    srcs.insert(std::pair<std::string, InferenceEngine::Blob::Ptr>("data", src));
+
+    InferenceEngine::OutputsDataMap out = net_reader.getNetwork().getOutputsInfo();
+
+    InferenceEngine::BlobMap outputBlobs;
+    std::pair<std::string, InferenceEngine::DataPtr> item = *out.begin();
+
+    InferenceEngine::TBlob<float>::Ptr output;
+    output = InferenceEngine::make_shared_blob<float>(item.second->getTensorDesc());
+    output->allocate();
+    outputBlobs[item.first] = output;
+
+    graph.Infer(srcs, outputBlobs);
+
+    InferenceEngine::TBlob<float>::Ptr dstOut = InferenceEngine::make_shared_blob<float>(item.second->getTensorDesc(), refDst.data());
+
+    compare(*output, *dstOut);
+}
+
+TEST_F(MKLDNNGraphStructureTests, TestCreateGraphWithSplit) {
+    std::string model = R"V0G0N(
+<net name="net" version="2" batch="1">
+    <layers>
+        <layer name="data" type="Input" precision="FP32" id="0">
+            <output>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>2</dim>
+                    <dim>8</dim>
+                    <dim>8</dim>
+                </port>
+            </output>
+        </layer>
+        <layer id="71" name="Split" precision="FP32" type="Split">
+			<data axis="1"/>
+			<input>
+				<port id="0">
+					<dim>1</dim>
+					<dim>2</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</input>
+			<output>
+				<port id="1">
+					<dim>1</dim>
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+				<port id="2">
+					<dim>1</dim>
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</output>
+		</layer>
+    </layers>
+    <edges>
+        <edge from-layer="0" from-port="0" to-layer="71" to-port="0"/>
+    </edges>
+</net>
+)V0G0N";
+
+    const size_t batchHeight = 8;
+    const size_t batchWidth = 8;
+    const InferenceEngine::TensorDesc tensorDesc(InferenceEngine::Precision::FP32, { 1, 2, batchHeight, batchWidth }, InferenceEngine::NCHW);
+    const size_t batchSize = batchHeight * batchWidth;
+    const float channel1Value = 1.0;
+    const float channel2Value = 2.0;
+
+    InferenceEngine::Blob::Ptr inputBlob = InferenceEngine::make_shared_blob<float>(tensorDesc);
+    inputBlob->allocate();
+    float* inputData = inputBlob->buffer().as<float *>();
+    for (size_t i = 0; i < inputBlob->size(); i++) {
+        inputData[i] = (i < batchSize) ? channel1Value : channel2Value;
+    }
+
+    InferenceEngine::CNNNetReader reader;
+    reader.ReadNetwork(model.data(), model.size());
+
+    InferenceEngine::TBlob<uint8_t>* weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, { 228 }, InferenceEngine::C });
+    weights->allocate();
+    float* weightsData = weights->buffer();
+    for (size_t i = 0ULL; i < weights->size() / sizeof(float); i++) {
+        weightsData[i] = 1.0;
+    }
+
+    const InferenceEngine::TBlob<uint8_t>::Ptr weightsPtr = InferenceEngine::TBlob<uint8_t>::Ptr(weights);
+    reader.SetWeights(weightsPtr);
+
+    MKLDNNGraphTestClass graph;
+    graph.CreateGraph(reader.getNetwork());
+
+    const auto& nodes = graph.getNodes();
+    ASSERT_EQ(nodes.size(), 5);
+    ASSERT_EQ(nodes[0].get()->getType(), MKLDNNPlugin::Type::Input);
+    ASSERT_EQ(nodes[1].get()->getType(), MKLDNNPlugin::Type::Split);
+    ASSERT_EQ(nodes[2].get()->getType(), MKLDNNPlugin::Type::Reorder);
+    ASSERT_EQ(nodes[3].get()->getType(), MKLDNNPlugin::Type::Output);
+    ASSERT_EQ(nodes[4].get()->getType(), MKLDNNPlugin::Type::Output);
+
+    InferenceEngine::OutputsDataMap outputs = reader.getNetwork().getOutputsInfo();
+    const std::pair<std::string, InferenceEngine::DataPtr> splitOutputItem1 {"Split.0", outputs["Split.0"]};
+    const std::pair<std::string, InferenceEngine::DataPtr> splitOutputItem2 {"Split.1", outputs["Split.1"]};
+
+    std::vector<float> splitExpectedOutputData1(batchSize);
+    std::vector<float> splitExpectedOutputData2(batchSize);
+    for (size_t i = 0; i < splitExpectedOutputData1.size(); i++) {
+        splitExpectedOutputData1[i] = 1.0;
+        splitExpectedOutputData2[i] = 2.0;
+    }
+    const InferenceEngine::TBlob<float>::Ptr splitExpectedOutputBlob1 = InferenceEngine::make_shared_blob<float>(
+        splitOutputItem1.second->getTensorDesc(),
+        splitExpectedOutputData1.data());
+    const InferenceEngine::TBlob<float>::Ptr splitExpectedOutputBlob2 = InferenceEngine::make_shared_blob<float>(
+        splitOutputItem2.second->getTensorDesc(),
+        splitExpectedOutputData2.data());
+
+    InferenceEngine::BlobMap outputBlobs;
+
+    // Reshape
+    InferenceEngine::TBlob<float>::Ptr splitOutputBlob1 = InferenceEngine::make_shared_blob<float>(splitOutputItem1.second->getTensorDesc());
+    splitOutputBlob1->allocate();
+    outputBlobs[splitOutputItem1.first] = splitOutputBlob1;
+
+    // Split
+    InferenceEngine::TBlob<float>::Ptr splitOutputBlob2 = InferenceEngine::make_shared_blob<float>(splitOutputItem2.second->getTensorDesc());
+    splitOutputBlob2->allocate();
+    outputBlobs[splitOutputItem2.first] = splitOutputBlob2;
+
+    const InferenceEngine::BlobMap inputsBlobMap = { std::pair<std::string, InferenceEngine::Blob::Ptr>("data", inputBlob) };
+    graph.Infer(inputsBlobMap, outputBlobs);
+
+    compare(*splitOutputBlob1, *splitExpectedOutputBlob1);
+    compare(*splitOutputBlob2, *splitExpectedOutputBlob2);
+}
+
+TEST_F(MKLDNNGraphStructureTests, TestCreateGraphWithFakeOutput) {
+    std::string modelTemplate = R"V0G0N(
+<net name="net" version="2" batch="1">
+    <layers>
+        <layer name="data" type="Input" precision="FP32" id="0">
+            <output>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>2</dim>
+                    <dim>8</dim>
+                    <dim>8</dim>
+                </port>
+            </output>
+        </layer>
+        <layer id="71" name="Split" precision="FP32" type="Split">
+			<data axis="1"/>
+			<input>
+				<port id="0">
+					<dim>1</dim>
+					<dim>2</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</input>
+			<output>
+				<port id="1">
+					<dim>1</dim>
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+				<port id="2">
+					<dim>1</dim>
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="72" name="Reshape" precision="FP32" type="Reshape">
+			<data axis="0" dim="1,64,64" num_axes="-1"/>
+			<input>
+				<port id="0">
+					<dim>1</dim>
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</input>
+			<output>
+				<port id="1">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</output>
+		</layer>
+    </layers>
+    <edges>
+        <edge from-layer="0" from-port="0" to-layer="71" to-port="0"/>
+        <edge from-layer="71" from-port="%d" to-layer="72" to-port="0"/>
+    </edges>
+</net>
+)V0G0N";
+
+    const size_t bufferForValues = 1024;
+    std::vector<char> model(modelTemplate.size() + bufferForValues);
+
+    const size_t batchHeight = 8;
+    const size_t batchWidth = 8;
+    const InferenceEngine::TensorDesc tensorDesc(InferenceEngine::Precision::FP32, { 1, 2, batchHeight, batchWidth }, InferenceEngine::NCHW);
+    const size_t batchSize = batchHeight * batchWidth;
+    const float channel1Value = 1.0;
+    const float channel2Value = 2.0;
+
+    InferenceEngine::Blob::Ptr inputBlob = InferenceEngine::make_shared_blob<float>(tensorDesc);
+    inputBlob->allocate();
+    float* inputData = inputBlob->buffer().as<float *>();
+    for (size_t i = 0; i < inputBlob->size(); i++) {
+        inputData[i] = (i < batchSize) ? channel1Value : channel2Value;
+    }
+
+    for (int splitFromPortNumber = 1; splitFromPortNumber <= 2; ++splitFromPortNumber) {
+        sprintf(model.data(), modelTemplate.c_str(), splitFromPortNumber);
+
+        InferenceEngine::CNNNetReader reader;
+        reader.ReadNetwork(model.data(), model.size());
+
+        InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, { 228 }, InferenceEngine::C });
+        weights->allocate();
+        float* weightsData = weights->buffer();
+        for (size_t i = 0ULL; i < weights->size() / sizeof(float); i++) {
+            weightsData[i] = 1.0;
+        }
+
+        const InferenceEngine::TBlob<uint8_t>::Ptr weightsPtr = InferenceEngine::TBlob<uint8_t>::Ptr(weights);
+        reader.SetWeights(weightsPtr);
+
+        MKLDNNGraphTestClass graph;
+        graph.CreateGraph(reader.getNetwork());
+
+        InferenceEngine::OutputsDataMap outputs = reader.getNetwork().getOutputsInfo();
+        const std::pair<std::string, InferenceEngine::DataPtr> reshapeOutputItem = std::make_pair("Reshape", outputs["Reshape"]);
+        const std::string splitOutputName = std::string("Split.") + (splitFromPortNumber == 1 ? "1" : "0");
+        const std::pair<std::string, InferenceEngine::DataPtr> splitOutputItem = std::make_pair(splitOutputName, outputs[splitOutputName]);
+
+        std::vector<float> reshapeExpectedOutputData(batchSize);
+        std::vector<float> splitExpectedOutputData(batchSize);
+        for (size_t i = 0; i < reshapeExpectedOutputData.size(); i++) {
+            reshapeExpectedOutputData[i] = (splitFromPortNumber == 1) ? 1.0 : 2.0;
+            splitExpectedOutputData[i] = (splitFromPortNumber == 1) ? 2.0 : 1.0;
+        }
+        const InferenceEngine::TBlob<float>::Ptr reshapeExpectedOutputBlob = InferenceEngine::make_shared_blob<float>(
+            reshapeOutputItem.second->getTensorDesc(),
+            reshapeExpectedOutputData.data());
+        const InferenceEngine::TBlob<float>::Ptr splitExpectedOutputBlob = InferenceEngine::make_shared_blob<float>(
+            splitOutputItem.second->getTensorDesc(),
+            splitExpectedOutputData.data());
+
+        InferenceEngine::BlobMap outputBlobs;
+
+        // Reshape
+        InferenceEngine::TBlob<float>::Ptr reshapeOutputBlob = InferenceEngine::make_shared_blob<float>(reshapeOutputItem.second->getTensorDesc());
+        reshapeOutputBlob->allocate();
+        outputBlobs[reshapeOutputItem.first] = reshapeOutputBlob;
+
+        // Split
+        InferenceEngine::TBlob<float>::Ptr splitOutputBlob = InferenceEngine::make_shared_blob<float>(splitOutputItem.second->getTensorDesc());
+        splitOutputBlob->allocate();
+        outputBlobs[splitOutputItem.first] = splitOutputBlob;
+
+        const InferenceEngine::BlobMap inputsBlobMap = { std::pair<std::string, InferenceEngine::Blob::Ptr>("data", inputBlob) };
+        graph.Infer(inputsBlobMap, outputBlobs);
+
+        compare(*reshapeOutputBlob, *reshapeExpectedOutputBlob);
+        compare(*splitOutputBlob, *splitExpectedOutputBlob);
+    }
+}
+
+TEST_F(MKLDNNGraphStructureTests, TestCreateGraphWithMultipleData) {
+    std::string model = R"V0G0N(
+<net name="net" version="2" batch="1">
+    <layers>
+        <layer name="data" type="Input" precision="FP32" id="0">
+            <output>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>2</dim>
+                    <dim>8</dim>
+                    <dim>8</dim>
+                </port>
+            </output>
+        </layer>
+        <layer id="1" name="split" precision="FP32" type="Split">
+			<data axis="1"/>
+			<input>
+				<port id="0">
+					<dim>1</dim>
+					<dim>2</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</input>
+			<output>
+				<port id="1">
+					<dim>1</dim>
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+				<port id="2">
+					<dim>1</dim>
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="2" name="reshape1" precision="FP32" type="Reshape">
+			<data axis="0" dim="1,64,64" num_axes="-1"/>
+			<input>
+				<port id="0">
+					<dim>1</dim>
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</input>
+			<output>
+				<port id="1">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</output>
+		</layer>
+        <layer id="3" name="reshape2" precision="FP32" type="Reshape">
+			<data axis="0" dim="1,64,64" num_axes="-1"/>
+			<input>
+				<port id="0">
+					<dim>1</dim>
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</input>
+			<output>
+				<port id="1">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</output>
+		</layer>
+        <layer id="4" name="reshape3" precision="FP32" type="Reshape">
+			<data axis="0" dim="1,64,64" num_axes="-1"/>
+			<input>
+				<port id="0">
+					<dim>1</dim>
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</input>
+			<output>
+				<port id="1">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</output>
+		</layer>
+    </layers>
+    <edges>
+        <edge from-layer="0" from-port="0" to-layer="1" to-port="0"/>
+        <edge from-layer="1" from-port="1" to-layer="2" to-port="0"/>
+        <edge from-layer="1" from-port="1" to-layer="3" to-port="0"/>
+        <edge from-layer="1" from-port="2" to-layer="4" to-port="0"/>
+    </edges>
+</net>
+)V0G0N";
+
+    const size_t batchHeight = 8;
+    const size_t batchWidth = 8;
+    const InferenceEngine::TensorDesc tensorDesc(InferenceEngine::Precision::FP32, { 1, 2, batchHeight, batchWidth }, InferenceEngine::NCHW);
+    const size_t batchSize = batchHeight * batchWidth;
+    const float channel1Value = 1.0;
+    const float channel2Value = 2.0;
+
+    InferenceEngine::Blob::Ptr inputBlob = InferenceEngine::make_shared_blob<float>(tensorDesc);
+    inputBlob->allocate();
+    float* inputData = inputBlob->buffer().as<float *>();
+    for (size_t i = 0; i < inputBlob->size(); i++) {
+        inputData[i] = (i < batchSize) ? channel1Value : channel2Value;
+    }
+
+
+    InferenceEngine::CNNNetReader reader;
+    reader.ReadNetwork(model.data(), model.size());
+
+    InferenceEngine::TBlob<uint8_t> *weights = new InferenceEngine::TBlob<uint8_t>({ InferenceEngine::Precision::U8, { 228 }, InferenceEngine::C });
+    weights->allocate();
+    float* weightsData = weights->buffer();
+    for (size_t i = 0ULL; i < weights->size() / sizeof(float); i++) {
+        weightsData[i] = 1.0;
+    }
+
+    const InferenceEngine::TBlob<uint8_t>::Ptr weightsPtr = InferenceEngine::TBlob<uint8_t>::Ptr(weights);
+    reader.SetWeights(weightsPtr);
+
+    reader.getNetwork().addOutput("split");
+
+    MKLDNNGraphTestClass graph;
+    graph.CreateGraph(reader.getNetwork());
+
+    const auto& nodes = graph.getNodes();
+    ASSERT_EQ(nodes.size(), 12);
+    ASSERT_EQ(nodes[0]->getType(), MKLDNNPlugin::Type::Input);
+    ASSERT_EQ(nodes[1]->getType(), MKLDNNPlugin::Type::Split);
+    ASSERT_EQ(nodes[2]->getType(), MKLDNNPlugin::Type::Reorder);
+    ASSERT_EQ(nodes[3]->getType(), MKLDNNPlugin::Type::Reshape);
+    ASSERT_EQ(nodes[4]->getType(), MKLDNNPlugin::Type::Output);
+    ASSERT_EQ(nodes[5]->getType(), MKLDNNPlugin::Type::Reorder);
+    ASSERT_EQ(nodes[6]->getType(), MKLDNNPlugin::Type::Reshape);
+    ASSERT_EQ(nodes[7]->getType(), MKLDNNPlugin::Type::Output);
+    ASSERT_EQ(nodes[8]->getType(), MKLDNNPlugin::Type::Reorder);
+    ASSERT_EQ(nodes[9]->getType(), MKLDNNPlugin::Type::Reshape);
+    ASSERT_EQ(nodes[10]->getType(), MKLDNNPlugin::Type::Output);
+    ASSERT_EQ(nodes[11]->getType(), MKLDNNPlugin::Type::Output);
+
+    InferenceEngine::OutputsDataMap outputs = reader.getNetwork().getOutputsInfo();
+    std::vector<std::pair<std::string, InferenceEngine::DataPtr>> outputItems = {
+        std::make_pair("reshape1", outputs.find("reshape1")->second),
+        std::make_pair("reshape2", outputs.find("reshape2")->second),
+        std::make_pair("reshape3", outputs.find("reshape3")->second),
+        std::make_pair("split.0", outputs.find("split.0")->second)
+    };
+
+    std::vector<std::vector<float>> expectedOutputData = {
+        std::vector<float>(batchSize),
+        std::vector<float>(batchSize),
+        std::vector<float>(batchSize),
+        std::vector<float>(batchSize)
+    };
+    for (size_t i = 0; i < batchSize; i++) {
+        expectedOutputData[0][i] = channel1Value;
+        expectedOutputData[1][i] = channel1Value;
+        expectedOutputData[2][i] = channel2Value;
+
+        expectedOutputData[3][i] = channel1Value;
+    }
+
+    std::vector<InferenceEngine::TBlob<float>::Ptr> expectedOutputBlobs(outputs.size());
+    for (size_t i = 0; i < outputs.size(); i++) {
+        expectedOutputBlobs[i] = InferenceEngine::make_shared_blob<float>(
+            outputItems[i].second->getTensorDesc(),
+            expectedOutputData[i].data());
+    }
+
+    std::vector<InferenceEngine::TBlob<float>::Ptr> outputBlobs;
+    outputBlobs.reserve(outputItems.size());
+
+    InferenceEngine::BlobMap outputBlobsMap;
+    for(const std::pair<std::string, InferenceEngine::DataPtr>& item : outputItems) {
+        InferenceEngine::TBlob<float>::Ptr blob = InferenceEngine::make_shared_blob<float>(item.second->getTensorDesc());
+        outputBlobs.push_back(blob);
+        blob->allocate();
+        outputBlobsMap[item.first] = blob;
+    }
+
+    const InferenceEngine::BlobMap inputsBlobMap = { std::pair<std::string, InferenceEngine::Blob::Ptr>("data", inputBlob) };
+    graph.Infer(inputsBlobMap, outputBlobsMap);
+
+    for(size_t i = 0; i < 3; i++) {
+        compare(*outputBlobs[i], *expectedOutputBlobs[i]);
+    }
+}
+
+TEST_F(MKLDNNGraphStructureTests, TestCreateGraphWithMultipleData_2) {
+    std::string model = R"V0G0N(
+<net name="net" version="2" batch="1">
+    <layers>
+        <layer name="data" type="Input" precision="FP32" id="0">
+            <output>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>2</dim>
+                    <dim>8</dim>
+                    <dim>8</dim>
+                </port>
+            </output>
+        </layer>
+        <layer id="1" name="split" precision="FP32" type="Split">
+			<data axis="1"/>
+			<input>
+				<port id="0">
+					<dim>1</dim>
+					<dim>2</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</input>
+			<output>
+				<port id="1">
+					<dim>1</dim>
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+				<port id="2">
+					<dim>1</dim>
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="2" name="power" precision="FP32" type="Power">
+			<data power="1" scale="-1.0" shift="0.0"/>
+			<input>
+				<port id="0">
+					<dim>1</dim>
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</input>
+			<output>
+				<port id="1">
+                    <dim>1</dim>
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>8</dim>
+				</port>
+			</output>
+		</layer>
+    </layers>
+    <edges>
+        <edge from-layer="0" from-port="0" to-layer="1" to-port="0"/>
+        <edge from-layer="1" from-port="1" to-layer="2" to-port="0"/>
+    </edges>
+</net>
+)V0G0N";
+    using namespace InferenceEngine;
+
+    const size_t H = 8;
+    const size_t W = 8;
+    const size_t imgSz = H * W;
+    const float channel1Value = 1.0;
+    const float channel2Value = 2.0;
+
+    const auto weights = std::make_shared<TBlob<uint8_t>>(TensorDesc(Precision::U8, SizeVector{0}, Layout::C));
+
+    InferenceEngine::CNNNetReader reader;
+    reader.ReadNetwork(model.data(), model.size());
+    reader.SetWeights(weights);
+
+    auto net = reader.getNetwork();
+    net.addOutput("split", 0);
+
+    MKLDNNGraphTestClass graph;
+    graph.CreateGraph(net);
+
+    auto inBlob   = make_shared_blob<float>({ Precision::FP32, SizeVector{1, 2, H, W}, Layout::NCHW });
+    auto outBlob1 = make_shared_blob<float>({ Precision::FP32, SizeVector{1, 1, H, W}, Layout::NCHW });
+    auto outBlob2 = make_shared_blob<float>({ Precision::FP32, SizeVector{1, 1, H, W}, Layout::NCHW });
+    auto outBlob3 = make_shared_blob<float>({ Precision::FP32, SizeVector{1, 1, H, W}, Layout::NCHW });
+
+    inBlob->allocate();
+    outBlob1->allocate();
+    outBlob2->allocate();
+    outBlob3->allocate();
+
+    auto in_ptr = inBlob->buffer().as<float*>();
+    for (int i = 0; i < imgSz; i++) {
+        in_ptr[i] = channel1Value;
+        in_ptr[i + imgSz] = channel2Value;
+    }
+
+    BlobMap inputBlobMap  = { {"data"   , inBlob  } },
+            outputBlobMap = { {"split.0", outBlob1},
+                              {"split.1", outBlob2},
+                              {"power"  , outBlob3} };
+
+    graph.Infer(inputBlobMap, outputBlobMap);
+
+    auto out_check = [] ( Blob::Ptr blob, float val) {
+        auto size = blob->size();
+        auto ptr = blob->buffer().as<float*>();
+        bool res = true;
+        for (int i = 0; i < size; i++)
+            res &= ( std::abs( ptr[i] - val ) < 0.00001f );
+        return res;
+    };
+
+    EXPECT_TRUE(out_check(outBlob1,  1));
+    EXPECT_TRUE(out_check(outBlob2,  2));
+    EXPECT_TRUE(out_check(outBlob3, -1));
+}
+
+TEST_F(MKLDNNGraphStructureTests, TestCreateGraphAllDataToConcat) {
+    using namespace InferenceEngine;
+    // Build the network.
+    Builder::Network netBuilder("");
+
+    // First input layer
+    idx_t inpId = netBuilder.addLayer(InferenceEngine::Builder::InputLayer("input").setPort(InferenceEngine::Port({1, 1, 4, 5})));
+
+    std::vector<size_t> weightsSize = {1, 1, 1, 1};  // OIHW
+    std::vector<float> twos(1, 2);
+    auto weights = make_shared_blob<float>({ Precision::FP32, weightsSize, InferenceEngine::Layout::OIHW }, &twos[0]);
+
+    idx_t weightsId = netBuilder.addLayer({}, Builder::ConstLayer("weights").setData(weights));
+
+    // Convolution layer
+    idx_t firstConvId = netBuilder.addLayer({{inpId}, {weightsId}}, Builder::ConvolutionLayer("conv").setKernel({1, 1})
+            .setStrides({1, 1}).setDilation({1, 1}).setPaddingsBegin({0, 0}).setPaddingsEnd({0, 0}).setGroup(1).setOutDepth(1));
+
+    std::vector<float> threes(1, 3);
+    weights = make_shared_blob<float>({ Precision::FP32, weightsSize, InferenceEngine::Layout::OIHW }, &threes[0]);
+
+    weightsId = netBuilder.addLayer({}, Builder::ConstLayer("weights").setData(weights));
+    // Convolution layer
+    idx_t secondConvId = netBuilder.addLayer({{inpId}, {weightsId}}, Builder::ConvolutionLayer("conv").setKernel({1, 1})
+            .setStrides({1, 1}).setDilation({1, 1}).setPaddingsBegin({0, 0}).setPaddingsEnd({0, 0}).setGroup(1).setOutDepth(1));
+
+    // Concat layer
+    idx_t concatId = netBuilder.addLayer({{inpId}, {firstConvId}, {secondConvId}},
+                                         InferenceEngine::Builder::ConcatLayer("concat").setAxis(1).setInputPorts(std::vector<InferenceEngine::Port>(3)));
+
+    // Output layer
+    InferenceEngine::Builder::OutputLayer outLayer("output");
+    netBuilder.addLayer({concatId}, outLayer);
+
+    auto cnn = CNNNetwork(Builder::convertToICNNNetwork(netBuilder.build()));
+
+    // Load the network
+    std::vector<size_t> inpSize = {5, 4, 1, 1};
+    std::vector<size_t> outSize = {5, 4, 3, 1};
+
+    InferenceEngine::BlobMap inputBlobs;
+    InferenceEngine::BlobMap outputBlobs;
+
+    std::vector<float> inpData(4*5, 1);
+    std::vector<float> outData(3*4*5, 1);
+    for (int i = 0; i < 4*5; ++i) {
+        inpData[i] = i;
+    }
+
+    inputBlobs["input"] = InferenceEngine::make_shared_blob<float>({ InferenceEngine::Precision::FP32, inpSize,
+        InferenceEngine::TensorDesc::getLayoutByDims(inpSize) }, &inpData[0]);
+    outputBlobs["concat"] = InferenceEngine::make_shared_blob<float>({ InferenceEngine::Precision::FP32, outSize,
+        InferenceEngine::TensorDesc::getLayoutByDims(outSize) }, &outData[0]);
+
+    MKLDNNGraphTestClass graph;
+    graph.CreateGraph(cnn);
+    graph.Infer(inputBlobs, outputBlobs);
+
+    std::vector<float> refDst = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+                                 0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38,
+                                 0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57};
+
+    InferenceEngine::TBlob<float>::Ptr dstOut = InferenceEngine::make_shared_blob<float>(outputBlobs["concat"]->getTensorDesc(), refDst.data());
+
+    compare(*outputBlobs["concat"], *dstOut);
+}
+
+TEST_F(MKLDNNGraphStructureTests, TestCreateGraphAllDataFromInputToConcat) {
+    using namespace InferenceEngine;
+    // Build the network.
+    Builder::Network netBuilder("");
+
+    // First input layer
+    idx_t inpId = netBuilder.addLayer(InferenceEngine::Builder::InputLayer("input").setPort(InferenceEngine::Port({1, 1, 4, 5})));
+
+    // Concat layer
+    idx_t concatId = netBuilder.addLayer({{inpId}, {inpId}, {inpId}},
+                                         InferenceEngine::Builder::ConcatLayer("concat").setAxis(1).setInputPorts(std::vector<InferenceEngine::Port>(3)));
+
+    // Output layer
+    InferenceEngine::Builder::OutputLayer outLayer("output");
+    netBuilder.addLayer({concatId}, outLayer);
+
+    auto cnn = CNNNetwork(Builder::convertToICNNNetwork(netBuilder.build()));
+
+    // Load the network
+    std::vector<size_t> inpSize = {5, 4, 1, 1};
+    std::vector<size_t> outSize = {5, 4, 3, 1};
+
+    InferenceEngine::BlobMap inputBlobs;
+    InferenceEngine::BlobMap outputBlobs;
+
+    std::vector<float> inpData(4*5, 1);
+    std::vector<float> outData(3*4*5, 1);
+    for (int i = 0; i < 4*5; ++i)
+    {
+        inpData[i] = i;
+    }
+
+    inputBlobs["input"] = InferenceEngine::make_shared_blob<float>({ InferenceEngine::Precision::FP32, inpSize,
+        InferenceEngine::TensorDesc::getLayoutByDims(inpSize) }, &inpData[0]);
+    outputBlobs["concat"] = InferenceEngine::make_shared_blob<float>({ InferenceEngine::Precision::FP32, outSize,
+        InferenceEngine::TensorDesc::getLayoutByDims(outSize) }, &outData[0]);
+
+
+    MKLDNNGraphTestClass graph;
+    graph.CreateGraph(cnn);
+    graph.Infer(inputBlobs, outputBlobs);
+
+    std::vector<float> refDst = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+                                 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+                                 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,};
+
+    InferenceEngine::TBlob<float>::Ptr dstOut = InferenceEngine::make_shared_blob<float>(outputBlobs["concat"]->getTensorDesc(), refDst.data());
+
+    compare(*outputBlobs["concat"], *dstOut);
+}
+
+
+TEST_F(MKLDNNGraphStructureTests, TestCheckIncorrectScaleShift) {
+    std::string model = R"V0G0N(
+<net name="net" version="2" batch="1">
+    <layers>
+        <layer name="data" type="Input" precision="FP32" id="0">
+            <output>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>1000</dim>
+                    <dim>16</dim>
+                </port>
+            </output>
+        </layer>
+        <layer id="1" name="test" precision="FP32" type="ScaleShift">
+            <input>
+                <port id="0">
+                    <dim>1</dim>
+                    <dim>1000</dim>
+                    <dim>16</dim>
+                </port>
+            </input>
+            <output>
+                <port id="3">
+                    <dim>1</dim>
+                    <dim>100</dim>
+                    <dim>16</dim>
+                </port>
+            </output>
+            <blobs>
+                <weights offset="0" size="64"/>
+                <biases offset="0" size="64"/>
+            </blobs>
+        </layer>
+    </layers>
+    <edges>
+        <edge from-layer="0" from-port="0" to-layer="1" to-port="0"/>
+    </edges>
+</net>
+)V0G0N";
+    using namespace InferenceEngine;
+    const auto weights = std::make_shared<TBlob<uint8_t>>(Precision::U8, Layout::C, SizeVector{64});
+
+    InferenceEngine::CNNNetReader reader;
+    reader.ReadNetwork(model.data(), model.size());
+    reader.SetWeights(weights);
+
+    MKLDNNGraphTestClass graph;
+    ASSERT_THROW(graph.CreateGraph(reader.getNetwork()), InferenceEngine::details::InferenceEngineException);
+}
+
+TEST_F(MKLDNNGraphStructureTests, TestConcatWithFourInputs) {
+    using namespace InferenceEngine;
+    // Build the network.
+    Builder::Network netBuilder("");
+
+    // First input layer
+    idx_t inpId = netBuilder.addLayer(InferenceEngine::Builder::InputLayer("input").setPort(InferenceEngine::Port({1, 1, 4, 5})));
+
+    std::vector<size_t> weightsSize = {1, 1, 1, 1};  // OIHW
+    std::vector<float> twos(1, 2);
+    auto weights = make_shared_blob<float>({ Precision::FP32, weightsSize, InferenceEngine::Layout::OIHW }, &twos[0]);
+    idx_t weightsId = netBuilder.addLayer({}, Builder::ConstLayer("weights").setData(weights));
+
+    // Convolution layer
+    idx_t firstConvId = netBuilder.addLayer({{inpId}, {weightsId}}, Builder::ConvolutionLayer("conv").setKernel({1, 1})
+            .setStrides({1, 1}).setDilation({1, 1}).setPaddingsBegin({0, 0}).setPaddingsEnd({0, 0}).setGroup(1).setOutDepth(1));
+
+    std::vector<float> threes(1, 3);
+    weights = make_shared_blob<float>({ Precision::FP32, weightsSize, InferenceEngine::Layout::OIHW }, &threes[0]);
+
+    weightsId = netBuilder.addLayer({}, Builder::ConstLayer("weights").setData(weights));
+    // Convolution layer
+    idx_t secondConvId = netBuilder.addLayer({{inpId}, {weightsId}}, Builder::ConvolutionLayer("conv").setKernel({1, 1})
+            .setStrides({1, 1}).setDilation({1, 1}).setPaddingsBegin({0, 0}).setPaddingsEnd({0, 0}).setGroup(1).setOutDepth(1));
+
+    std::vector<float> four(1, -1);
+    weights = make_shared_blob<float>({ Precision::FP32, weightsSize, InferenceEngine::Layout::OIHW }, &four[0]);
+
+    weightsId = netBuilder.addLayer({}, Builder::ConstLayer("weights").setData(weights));
+    // Convolution layer
+    idx_t thirdConvId = netBuilder.addLayer({{inpId}, {weightsId}}, Builder::ConvolutionLayer("conv").setKernel({1, 1})
+            .setStrides({1, 1}).setDilation({1, 1}).setPaddingsBegin({0, 0}).setPaddingsEnd({0, 0}).setGroup(1).setOutDepth(1));
+
+    // Concat layer
+    idx_t concatId = netBuilder.addLayer({{inpId}, {firstConvId}, {secondConvId}, {thirdConvId}},
+                                         InferenceEngine::Builder::ConcatLayer("concat").setAxis(1).setInputPorts(std::vector<InferenceEngine::Port>(4)));
+
+    // Output layer
+    InferenceEngine::Builder::OutputLayer outLayer("output");
+    netBuilder.addLayer({concatId}, outLayer);
+
+    auto cnn = CNNNetwork(Builder::convertToICNNNetwork(netBuilder.build()));
+
+    // Load the network
+    std::vector<size_t> inpSize = {5, 4, 1, 1};
+    std::vector<size_t> outSize = {5, 4, 4, 1};
+
+    InferenceEngine::BlobMap inputBlobs;
+    InferenceEngine::BlobMap outputBlobs;
+
+    std::vector<float> inpData(4*5, 1);
+    std::vector<float> outData(4*4*5, 1);
+    for (int i = 0; i < 4*5; ++i) {
+        inpData[i] = i;
+    }
+
+    inputBlobs["input"] = InferenceEngine::make_shared_blob<float>({ InferenceEngine::Precision::FP32, inpSize,
+        InferenceEngine::TensorDesc::getLayoutByDims(inpSize) }, &inpData[0]);
+    outputBlobs["concat"] = InferenceEngine::make_shared_blob<float>({ InferenceEngine::Precision::FP32, outSize,
+        InferenceEngine::TensorDesc::getLayoutByDims(outSize) }, &outData[0]);
+
+
+    MKLDNNGraphTestClass graph;
+    graph.CreateGraph(cnn);
+    graph.Infer(inputBlobs, outputBlobs);
+
+    std::vector<float> refDst = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+                                 0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38,
+                                 0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57,
+                                 0, -1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12, -13, -14, -15, -16, -17, -18, -19};
+
+    InferenceEngine::TBlob<float>::Ptr dstOut = InferenceEngine::make_shared_blob<float>(outputBlobs["concat"]->getTensorDesc(), refDst.data());
+
+    compare(*outputBlobs["concat"], *dstOut);
 }

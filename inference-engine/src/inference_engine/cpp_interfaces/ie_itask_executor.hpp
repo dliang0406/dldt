@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -14,6 +13,8 @@ namespace InferenceEngine {
 class INFERENCE_ENGINE_API_CLASS(ITaskExecutor) {
 public:
     typedef std::shared_ptr<ITaskExecutor> Ptr;
+
+    virtual ~ITaskExecutor() = default;
 
     /**
      * @brief Add task for execution and notify working thread about new task to start.

@@ -28,15 +28,12 @@ namespace rnd_generators
     {
         // NOTE: Should be imported from clDNN API headers.
         template <typename Ty> struct always_false : std::false_type {};
-
-        template <typename Ty>
-        constexpr bool always_false_v = always_false<Ty>::value;
     }
 
     template <typename NumberTy>
     struct number_caps
     {
-        static_assert(meta::always_false_v<NumberTy>, "Capabilities were not defined for selected number type. Please add specialization.");
+        static_assert(meta::always_false<NumberTy>::value, "Capabilities were not defined for selected number type. Please add specialization.");
     };
 
     template <>
@@ -68,7 +65,6 @@ namespace rnd_generators
     static_assert(number_caps<float>::inv_exp2(6) == 0.015625f, "1/exp2(6)");
     static_assert(number_caps<float>::inv_exp2(7) == 0.0078125f, "1/exp2(7)");
     static_assert(number_caps<float>::inv_exp2(8) == 0.00390625f, "1/exp2(8)");
-
 
     template <>
     struct number_caps<double>
@@ -157,7 +153,6 @@ namespace rnd_generators
             return reinterpret_cast<const output_type&>(conv_repr);
         }
     };
-
 
     template <typename NumberTy, typename RndEngineTy>
     auto gen_number(RndEngineTy& rnd_engine,

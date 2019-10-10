@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "include/common.cl"
+#include "include/data_types.cl"
 
-#include "include/include_all.cl"
 
 #if FP16_UNIT_USED
     #define UNIT_CVT_FUNC(val) convert_half(val)
@@ -73,7 +74,7 @@ KERNEL (normalize_gpu_across_spatial_bfyx)(const __global UNIT_TYPE* input, __gl
         {
             for (uint x = 0; x < INPUT0_SIZE_X; x++)
             {
-                output[output_idx] = ACTIVATION(UNIT_CVT_FUNC(norm) * input[input_idx] * scale_input[scale_index], NL_M, NL_N);
+                output[output_idx] = ACTIVATION(UNIT_CVT_FUNC(norm) * input[input_idx] * scale_input[scale_index], ACTIVATION_PARAMS);
                 input_idx += INPUT0_X_PITCH;
                 output_idx += OUTPUT_X_PITCH;
             }

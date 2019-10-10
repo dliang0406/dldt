@@ -1,5 +1,5 @@
 """
- Copyright (c) 2017-2018 Intel Corporation
+ Copyright (c) 2017-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -15,15 +15,15 @@
 """
 
 import networkx as nx
+
+from extensions.front.mxnet.ssd_pattern_flatten_softmax_activation import SsdPatternFlattenSoftmaxActivation
 from extensions.front.mxnet.ssd_pattern_remove_flatten import SsdPatternRemoveFlatten
 from extensions.front.mxnet.ssd_pattern_remove_reshape import SsdPatternRemoveReshape
-from extensions.front.mxnet.ssd_pattern_flatten_softmax_activation import SsdPatternFlattenSoftmaxActivation
-from mo.graph.graph import create_edge
 from mo.front.common.replacement import FrontReplacementSubgraph
+from mo.graph.graph import Graph
 
 
 class SsdPatternRemoveTranspose(FrontReplacementSubgraph):
-
     enabled = True
 
     def run_before(self):
@@ -32,18 +32,17 @@ class SsdPatternRemoveTranspose(FrontReplacementSubgraph):
     def pattern(self):
         return dict(
             nodes=[
-                ('transpose', dict(op='transpose')),
-                ('softmax_activation', dict(op='SoftmaxActivation')),
+                ('transpose', dict(op='Transpose')),
+                ('softmax_activation', dict(op='SoftMax')),
                 ('multi_box_detection', dict(op='_contrib_MultiBoxDetection'))
             ],
             edges=[
                 ('transpose', 'softmax_activation', {'in': 0}),
                 ('softmax_activation', 'multi_box_detection', {'in': 1}),
-            ],
-            node_attrs=['op'],
-            edge_attrs=['in'])
+            ]
+        )
 
-    def replace_sub_graph(self, graph: nx.MultiDiGraph, match: dict):
+    def replace_sub_graph(self, graph: Graph, match: dict):
         """
         Need to find each occurrence of pattern:
         transpose -> SoftmaxActivation -> _contrib_MultiBoxDetection
@@ -53,7 +52,7 @@ class SsdPatternRemoveTranspose(FrontReplacementSubgraph):
 
         Parameters
         ----------
-        graph : nx.MultiDiGraph
+        graph : Graph
            Graph with loaded model.
          match : dict
            Patterns which were found in graph structure.
@@ -65,4 +64,4 @@ class SsdPatternRemoveTranspose(FrontReplacementSubgraph):
         graph.remove_edge(transpose_in_node.id, transpose_node.id)
         graph.remove_edge(transpose_node.id, softmax_activation.id)
         graph.remove_node(transpose_node.id)
-        create_edge(transpose_in_node, softmax_activation)
+        graph.create_edge(transpose_in_node, softmax_activation)

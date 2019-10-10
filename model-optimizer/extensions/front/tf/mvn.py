@@ -1,5 +1,5 @@
 """
- Copyright (c) 2017-2018 Intel Corporation
+ Copyright (c) 2017-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -16,13 +16,11 @@
 
 import logging as log
 
-import networkx as nx
-
-from mo.front.common.replacement import FrontReplacementSubgraph
-from mo.graph.graph import Node, replace_node
-from mo.ops.eltwise import Eltwise
-from mo.ops.op import Op
 from extensions.front.squared_difference import SquaredDifference
+from mo.front.common.replacement import FrontReplacementSubgraph
+from mo.graph.graph import Node, Graph
+from extensions.ops.elementwise import Mul, Add
+from mo.ops.op import Op
 
 
 class MVN(FrontReplacementSubgraph):
@@ -35,10 +33,10 @@ class MVN(FrontReplacementSubgraph):
         log.debug('Enabled MVN replacement')
         return dict(
             nodes=[
-                ('mean', dict(op='Mean')),
+                ('mean', dict(op='ReduceMean')),
                 ('stop_grad', dict(op='StopGradient')),
                 ('sqdiff', dict(op='SquaredDifference')),
-                ('variance', dict(op='Mean')),
+                ('variance', dict(op='ReduceMean')),
                 ('squeeze_mean', dict(op='Squeeze')),
                 ('squeeze_variance', dict(op='Squeeze')),
                 ('fbn', dict(op='FusedBatchNorm')),
@@ -51,11 +49,9 @@ class MVN(FrontReplacementSubgraph):
                 ('variance', 'squeeze_variance', {'in': 0}),
                 ('squeeze_mean', 'fbn', {'in': 3}),
                 ('squeeze_variance', 'fbn', {'in': 4}),
-            ],
-            node_attrs=['op'],
-            edge_attrs=['in'])
+            ])
 
-    def replace_sub_graph(self, graph: nx.MultiDiGraph, match: dict):
+    def replace_sub_graph(self, graph: Graph, match: dict):
         fbn = match['fbn']
         input = fbn.in_node(0)
         log.debug('Found potential MVN pattern after {} with name {}'.format(input.op, input.name))
@@ -73,37 +69,39 @@ class MVN(FrontReplacementSubgraph):
         mvn.attrs['old_infer'] = mvn.attrs['infer']
         mvn.attrs['infer'] = __class__.infer
 
-        mul = Eltwise(graph, dict(operation='mul', name=fbn.name + '/Mul_'))
-        add = Eltwise(graph, dict(operation='sum', name=fbn.name + '/Add_'))
+        mul = Mul(graph, dict(operation='mul', name=fbn.name + '/Mul_'))
+        add = Add(graph, dict(operation='sum', name=fbn.name + '/Add_'))
 
         input_gamma = fbn.in_node(1)
         input_beta = fbn.in_node(2)
 
         mean_reduction = match['mean'].in_node(1)
+        variance_reduction = match['variance'].in_node(1)
 
         new_subgraph = add.create_node([
             mul.create_node([
-                mvn.create_node([input, mean_reduction]),
+                mvn.create_node([input, mean_reduction, variance_reduction]),
                 input_gamma
             ]),
             input_beta
         ])
-
-        replace_node(fbn, new_subgraph)
+        fbn.replace_node(new_subgraph)
 
     @staticmethod
     def infer(node: Node):
-        if not (node.in_node(1).has_valid('value')):
+        if not (node.in_node(1).has_valid('value') and node.in_node(2).has_valid('value')):
             log.warning('Reduction indices for mean and variance for MVN node {} are not constants'.format(node.name))
             return
 
-        if not (all(node.in_node(1).value == node.required_reduction_indices)):
+        if not (all(node.in_node(1).value == node.required_reduction_indices) and
+                    all(node.in_node(2).value == node.required_reduction_indices)):
             log.warning('Reduction indices for mean {} and variance {} do not match required ones {}'.format(
                 node.in_node(1).value,
-                node.in_node(1).value,
+                node.in_node(2).value,
                 node.required_reduction_indices
             ))
             return
 
+        node.graph.remove_edge(node.in_node(2).id, node.id)
         node.graph.remove_edge(node.in_node(1).id, node.id)
         node.old_infer(node)

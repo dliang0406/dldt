@@ -15,24 +15,23 @@
 */
 
 #include <gtest/gtest.h>
-#include "api/CPP/memory.hpp"
-#include <api/CPP/input_layout.hpp>
-#include "api/CPP/lookup_table.hpp"
-#include "api/CPP/arg_max_min.hpp"
-#include <api/CPP/topology.hpp>
-#include <api/CPP/network.hpp>
-#include <api/CPP/engine.hpp>
+#include "api/memory.hpp"
+#include <api/input_layout.hpp>
+#include "api/lookup_table.hpp"
+#include "api/arg_max_min.hpp"
+#include <api/topology.hpp>
+#include <api/network.hpp>
+#include <api/engine.hpp>
 #include "test_utils/test_utils.h"
 
 using namespace cldnn;
 using namespace std;
 using namespace tests;
 
-
 TEST(lookup_table_base, base) {
     //  Input  : 2x3x2x2
     static const int32_t x_size = 2, y_size = 2, feature_num = 3, batch_num = 2;
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto input = memory::allocate(engine, { data_types::f32, format::bfyx, { batch_num, feature_num, x_size , y_size } });
     auto input2 = memory::allocate(engine, { data_types::f32, format::bfyx, {2, 1, 1, 1} });
@@ -83,7 +82,7 @@ TEST(lookup_table_base, base) {
 TEST(lookup_table_num, base) {
     //  Input  : 2x3x2x2
     static const int32_t x_size = 2, y_size = 2, feature_num = 3, batch_num = 2, number_of_values = 3;
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto input = memory::allocate(engine, { data_types::f32, format::bfyx,{ batch_num, feature_num, x_size , y_size } });
     auto input2 = memory::allocate(engine, { data_types::f32, format::bfyx,{ 2, 1, 3, 1 } });
@@ -160,12 +159,12 @@ TEST(lookup_table_num, base) {
 TEST(lookup_table_with_arg_max, base) {
     //  Input  : 2x3x2x2
     static const int32_t x_size = 2, y_size = 2, feature_num = 3, batch_num = 2;
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto input = memory::allocate(engine, { data_types::f32, format::yxfb,{ batch_num, feature_num, x_size , y_size } });
     topology topology;
     topology.add(input_layout("input", input.get_layout()));
-    topology.add(arg_max_min("arg_max", "input", arg_max_min::max));
+    topology.add(arg_max_min("arg_max", { "input" }, arg_max_min::max));
     topology.add(lookup_table("table", "input", "arg_max"));
     vector<float> input_vec = {
         //y0x0 y0x1 y1x0 y1x1
@@ -207,7 +206,7 @@ TEST(lookup_table_with_arg_max, base) {
 TEST(lookup_table_axis, base) {
     //  Input  : 2x3x2x2
     static const int32_t x_size = 2, y_size = 2, feature_num = 3, batch_num = 2, number_of_values = 2;
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto input = memory::allocate(engine, { data_types::f32, format::bfyx,{ batch_num, feature_num, x_size , y_size } });
     auto input2 = memory::allocate(engine, { data_types::f32, format::bfyx,{ 2, 3, 2, 2 } });

@@ -17,7 +17,7 @@
 #include "include/common.cl"
 #include "include/fetch.cl"
 #include "include/data_types.cl"
-#include "include/activation_functions.cl"
+
 
 KERNEL(normalization)(__global const INPUT0_TYPE* input, __global OUTPUT_TYPE* output)
 {
@@ -91,5 +91,5 @@ KERNEL(normalization)(__global const INPUT0_TYPE* input, __global OUTPUT_TYPE* o
     
     const UNIT_TYPE val = input[input_index];
     const UNIT_TYPE normres =  val*normalization_factor;
-    output[output_index] = ACTIVATION(normres, NL_M ,NL_N);
+    output[output_index] = ACTIVATION(normres, ACTIVATION_PARAMS);
 }

@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -15,7 +14,7 @@ namespace MKLDNNPlugin {
 
 class MKLDNNConvolutionNode : public MKLDNNNode {
 public:
-    MKLDNNConvolutionNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng);
+    MKLDNNConvolutionNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket);
     ~MKLDNNConvolutionNode() override = default;
 
     void getSupportedDescriptors() override;
@@ -28,29 +27,36 @@ public:
     bool canBeInPlace() const override {
         return false;
     }
+    void setPostOps(mkldnn::primitive_attr &attr, bool initWeights);
+
+protected:
+    void addScaleToPrimitiveAttr(mkldnn::primitive_attr attr) const;
 
 private:
     static Register<MKLDNNConvolutionNode> reg;
     bool withBiases;
+    bool withActivation;
     bool withSum;
     bool isDW;
     bool isMerged;
     bool isGrouped;
-    std::vector<int> stride;
-    std::vector<int> dilation;
-    std::vector<int> paddingL;
-    std::vector<int> paddingR;
+    std::vector<ptrdiff_t> stride;
+    std::vector<ptrdiff_t> dilation;
+    std::vector<ptrdiff_t> paddingL;
+    std::vector<ptrdiff_t> paddingR;
     InferenceEngine::SizeVector weightDims;
     InferenceEngine::SizeVector biasesDims;
 
-    int dw_conv_oc;
-    int dw_conv_ih;
-    int dw_conv_iw;
-    int dw_conv_kh;
-    int dw_conv_kw;
-    int dw_conv_sh;
-    int dw_conv_sw;
-    std::vector<MKLDNNMemoryPtr> DWConvInternalBlobMemory;
+    ptrdiff_t dw_conv_oc;
+    ptrdiff_t dw_conv_ih;
+    ptrdiff_t dw_conv_iw;
+    std::vector<ptrdiff_t> dw_conv_kernel;
+    std::vector<ptrdiff_t> dw_conv_strides;
+    mkldnn::memory::data_type dw_conv_in_dt;
+    std::vector<MKLDNNMemoryPtr> PostOpsIntBlobMemory;
+
+    InferenceEngine::ConvolutionLayer* convLayer;
+    InferenceEngine::Blob::Ptr wScale, oScale;
 };
 
 }  // namespace MKLDNNPlugin

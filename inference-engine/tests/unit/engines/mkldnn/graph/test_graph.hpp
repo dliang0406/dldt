@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -65,7 +64,11 @@ public:
 
         auto input = inputNodes.find(name);
         if (input != inputNodes.end()) {
-            MKLDNNPlugin::MKLDNNDims outDims = input->second->getChildEdgeAt(0)->getDims();
+            MKLDNNPlugin::MKLDNNDims outDims;
+            if(input->second->getChildEdgeAt(0)->getDims().ndims() == 0 )
+                outDims = MKLDNNPlugin::MKLDNNDims(InferenceEngine::SizeVector(1,1));
+            else
+                outDims = input->second->getChildEdgeAt(0)->getDims();
             if (batch < 1)
                 batch = outDims[0];
 
@@ -79,7 +82,7 @@ public:
             // todo: make sure 'name' exists in this map...
             if (_meanImages.find(name) != _meanImages.end()) {
                 if (in->getTensorDesc().getPrecision() == InferenceEngine::Precision::FP32) {
-                    _meanImages[name].Subtract(outDims, reinterpret_cast<float *>(inter_data_ptr));
+                    _meanImages[name].Subtract(outDims, reinterpret_cast<float *>(inter_data_ptr), in->getTensorDesc().getLayout());
                 } else {
                     THROW_IE_EXCEPTION << "Mean image of type " << in->getTensorDesc().getPrecision().name() << " is unsupported";
                 }
@@ -90,37 +93,85 @@ public:
     }
 
     void Infer(const InferenceEngine::BlobMap& inputs, InferenceEngine::BlobMap& result, int batch = -1) {
-        for (auto it = result.begin(); it != result.end(); it++) {
-            InferenceEngine::TBlob<float> *out = dynamic_cast<InferenceEngine::TBlob<float> *>((*it).second.get());
-            if (out == nullptr) {
-                FAIL() << "Output data precision not supported. Expected float.";
-            }
-        }
-
         try {
             // need to retain converted blobs until infer finish
             std::vector<InferenceEngine::Blob::Ptr> convertedInputs;
             for (auto input : inputs) {
-                InferenceEngine::TBlob<float> *in_f = nullptr;
-                switch (input.second->precision()) {
-                    case InferenceEngine::Precision::FP32:
+                switch (input.second->getTensorDesc().getPrecision()) {
+                    case InferenceEngine::Precision::FP32: {
+                        InferenceEngine::TBlob<float> *in_f = nullptr;
                         in_f = dynamic_cast<InferenceEngine::TBlob<float> *>(input.second.get());
-                        break;
+                        if (in_f == nullptr) {
+                            FAIL() << "Input data precision not supported. Expected float.";
+                        }
+
+                        if (in_f->readOnly() == nullptr) {
+                            THROW_IE_EXCEPTION << "Input data was not allocated.";
+                        }
+                    }
+                    break;
+                    case InferenceEngine::Precision::I32: {
+                        InferenceEngine::TBlob<int32_t> *in_f = nullptr;
+                        in_f = dynamic_cast<InferenceEngine::TBlob<int32_t> *>(input.second.get());
+                        if (in_f == nullptr) {
+                            FAIL() << "Input data precision not supported. Expected float.";
+                        }
+
+                        if (in_f->readOnly() == nullptr) {
+                            THROW_IE_EXCEPTION << "Input data was not allocated.";
+                        }
+                    }
+                    break;
+                    case InferenceEngine::Precision::U16: {
+                        InferenceEngine::TBlob<uint16_t> *in_f = nullptr;
+                        in_f = dynamic_cast<InferenceEngine::TBlob<uint16_t> *>(input.second.get());
+                        if (in_f == nullptr) {
+                            FAIL() << "Input data precision not supported. Expected float.";
+                        }
+
+                        if (in_f->readOnly() == nullptr) {
+                            THROW_IE_EXCEPTION << "Input data was not allocated.";
+                        }
+                    }
+                    break;
+                    case InferenceEngine::Precision::I16: {
+                        InferenceEngine::TBlob<int16_t> *in_f = nullptr;
+                        in_f = dynamic_cast<InferenceEngine::TBlob<int16_t> *>(input.second.get());
+                        if (in_f == nullptr) {
+                            FAIL() << "Input data precision not supported. Expected float.";
+                        }
+
+                        if (in_f->readOnly() == nullptr) {
+                            THROW_IE_EXCEPTION << "Input data was not allocated.";
+                        }
+                    }
+                    break;
+                    case InferenceEngine::Precision::U8: {
+                        InferenceEngine::TBlob<uint8_t> *in_f = nullptr;
+                        in_f = dynamic_cast<InferenceEngine::TBlob<uint8_t> *>(input.second.get());
+                        if (in_f == nullptr) {
+                            FAIL() << "Input data precision not supported. Expected float.";
+                        }
+
+                        if (in_f->readOnly() == nullptr) {
+                            THROW_IE_EXCEPTION << "Input data was not allocated.";
+                        }
+                    }
+                    break;
+                    case InferenceEngine::Precision::I8: {
+                        InferenceEngine::TBlob<int8_t> *in_f = nullptr;
+                        in_f = dynamic_cast<InferenceEngine::TBlob<int8_t> *>(input.second.get());
+                        if (in_f == nullptr) {
+                            FAIL() << "Input data precision not supported. Expected float.";
+                        }
+
+                        if (in_f->readOnly() == nullptr) {
+                            THROW_IE_EXCEPTION << "Input data was not allocated.";
+                        }
+                    }
+                    break;
                     default:
-                        THROW_IE_EXCEPTION << "Unsupported input precision " << input.second->precision();
-                }
-
-                switch (input.second->precision()) {
-                    case InferenceEngine::Precision::FP32: break;
-                    default: FAIL() << "Unsupported precision";
-                }
-
-                if (in_f == nullptr) {
-                    FAIL() << "Input data precision not supported. Expected float.";
-                }
-
-                if (in_f->readOnly() == nullptr) {
-                    THROW_IE_EXCEPTION << "Input data was not allocated.";
+                        THROW_IE_EXCEPTION << "Unsupported input precision " << input.second->getTensorDesc().getPrecision();
                 }
 
                 PushInputData(input.first, input.second, batch);

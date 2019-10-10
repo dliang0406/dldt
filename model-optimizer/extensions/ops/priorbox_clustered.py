@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -17,18 +17,21 @@
 import networkx as nx
 import numpy as np
 
+from mo.front.common.layout import get_width_dim, get_height_dim
 from mo.front.extractor import attr_getter
-from mo.graph.graph import Node
+from mo.graph.graph import Node, Graph
 from mo.ops.op import Op
 
 
 class PriorBoxClusteredOp(Op):
     op = 'PriorBoxClustered'
 
-    def __init__(self, graph: nx.MultiDiGraph, attrs: dict):
+    def __init__(self, graph: Graph, attrs: dict):
         mandatory_props = {
             'type': __class__.op,
             'op': __class__.op,
+            'in_ports_count': 2,
+            'out_ports_count': 1,
             'infer': PriorBoxClusteredOp.priorbox_clustered_infer
         }
         super().__init__(graph, mandatory_props, attrs)
@@ -67,8 +70,9 @@ class PriorBoxClusteredOp(Op):
 
     @staticmethod
     def priorbox_clustered_infer(node: Node):
+        layout = node.graph.graph['layout']
         data_shape = node.in_node(0).shape
         num_ratios = len(node.width)
 
-        res_prod = data_shape[2] * data_shape[3] * num_ratios * 4
+        res_prod = data_shape[get_height_dim(layout, 4)] * data_shape[get_width_dim(layout, 4)] * num_ratios * 4
         node.out_node(0).shape = np.array([1, 2, res_prod], dtype=np.int64)

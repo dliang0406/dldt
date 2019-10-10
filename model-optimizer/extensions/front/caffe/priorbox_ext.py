@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -38,8 +38,6 @@ class PriorBoxFrontExtractor(FrontExtractorOp):
             'aspect_ratio': np.array(param.aspect_ratio),
             'min_size': np.array(param.min_size),
             'max_size': np.array(param.max_size),
-            'width': list(param.width),
-            'height': list(param.height),
             'flip': int(param.flip),
             'clip': int(param.clip),
             'variance': list(variance),
@@ -51,6 +49,16 @@ class PriorBoxFrontExtractor(FrontExtractorOp):
             'step_w': param.step_w,
             'offset': param.offset,
         }
+
+        # these params can be omitted in caffe.proto and in param as consequence,
+        # so check if it is set or set to default
+        fields = [field[0].name for field in param.ListFields()]
+        if 'density' in fields:
+            update_attrs['density'] = np.array(param.density)
+        if 'fixed_size' in fields:
+            update_attrs['fixed_size'] = np.array(param.fixed_size)
+        if 'fixed_ratio' in fields:
+            update_attrs['fixed_ratio'] = np.array(param.fixed_ratio)
 
         mapping_rule = merge_attrs(param, update_attrs)
 

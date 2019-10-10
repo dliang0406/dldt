@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -15,7 +14,7 @@ using namespace mkldnn;
 using namespace MKLDNNPlugin;
 using namespace InferenceEngine;
 
-MKLDNNROIPoolingNode::MKLDNNROIPoolingNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng) : MKLDNNNode(layer, eng) {}
+MKLDNNROIPoolingNode::MKLDNNROIPoolingNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket) : MKLDNNNode(layer, eng, socket) {}
 
 void MKLDNNROIPoolingNode::getSupportedDescriptors() {
     if (!descs.empty())
@@ -36,9 +35,9 @@ void MKLDNNROIPoolingNode::getSupportedDescriptors() {
         THROW_IE_EXCEPTION << "Cannot convert ROIPooling layer.";
 
     if (getParentEdges().empty())
-        THROW_IE_EXCEPTION << "Incorrect number of input edges.";
+        THROW_IE_EXCEPTION << "Incorrect number of input edges for layer " << getName();
     if (getChildEdges().empty())
-        THROW_IE_EXCEPTION << "Incorrect number of output edges.";
+        THROW_IE_EXCEPTION << "Incorrect number of output edges for layer " << getName();
 
     pooled_h = genericLayer->GetParamAsInt("pooled_h");
     pooled_w = genericLayer->GetParamAsInt("pooled_w");
@@ -83,7 +82,7 @@ void MKLDNNROIPoolingNode::createPrimitive() {
 
     const PrimitiveDescInfo *selected_pd = getSelectedPrimitiveDescriptor();
     if (selected_pd == nullptr)
-        THROW_IE_EXCEPTION << "Preferable primitive descriptor does not set for node " << getName() << ".";
+        THROW_IE_EXCEPTION << "Preferable primitive descriptor is not set for node " << getName() << ".";
 
     auto prim_desc = roi_pooling_forward::primitive_desc(*selected_desc_ptr, getEngine());
     primitive_desc_iterator itpd = descs[0].createPrimitiveDescriptorIterator(getEngine());

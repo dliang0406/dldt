@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -27,7 +26,7 @@ class CallbackManager {
     StatusCode _requestStatus = OK;
     IInferRequest::CompletionCallback _callback = nullptr;
     bool _enabled = false;
-    IInferRequest::WeakPtr _publicInterface;
+    IInferRequest::Ptr _publicInterface;
     ITaskExecutor::Ptr _callbackExecutor;
 
 public:
@@ -54,11 +53,8 @@ public:
 
     void runCallback() {
         if (isCallbackEnabled()) {
-            auto requestPtr = _publicInterface.lock();
-            if (!requestPtr) {
-                THROW_IE_EXCEPTION << "Failed to run callback: can't get pointer to request";
-            }
-            _callback(requestPtr, _requestStatus);
+            if (nullptr == _publicInterface) THROW_IE_EXCEPTION << "Failed to run callback: can't get pointer to request";
+            _callback(_publicInterface, _requestStatus);
             if (_requestException) std::rethrow_exception(_requestException);
         }
     }
@@ -77,7 +73,7 @@ public:
     }
 
     void set_publicInterface(IInferRequest::Ptr publicInterface) {
-        _publicInterface = publicInterface;
+        _publicInterface = std::shared_ptr<IInferRequest>(publicInterface.get(), [](IInferRequest*){});
     }
 };
 
@@ -92,6 +88,7 @@ public:
             : _syncRequest(request),
               _requestExecutor(taskExecutor),
               _requestSynchronizer(taskSynchronizer),
+              _userData(nullptr),
               _callbackManager(callbackExecutor) {
         _syncTask = std::make_shared<Task>([this]() { _syncRequest->Infer(); });
         _currentTask = _syncTask;
@@ -104,13 +101,13 @@ public:
     void waitAllAsyncTasks() {
         try {
             while (!_listAsyncTasks.empty()) {
-                _listAsyncTasks.remove_if([this](StagedTask::Ptr task) -> bool {
+                _listAsyncTasks.remove_if([](StagedTask::Ptr task) -> bool {
                     auto sts = task->getStatus();
                     return !task->isOnWait() && (Task::Status::TS_DONE == sts || Task::Status::TS_ERROR == sts ||
                                                  Task::Status::TS_INITIAL == sts);
                 });
                 auto findIter = std::find_if(_listAsyncTasks.begin(), _listAsyncTasks.end(),
-                                             [this](StagedTask::Ptr task) { return !task->isOnWait(); });
+                                             [](StagedTask::Ptr task) { return !task->isOnWait(); });
                 if (findIter != _listAsyncTasks.end()) {
                     try {
                         (*findIter)->wait(-1);
@@ -142,7 +139,8 @@ public:
     }
 
     virtual void startAsyncTask() {
-        if (!_requestExecutor->startTask(_currentTask)) THROW_IE_EXCEPTION << REQUEST_BUSY_str;
+        if (!_requestExecutor->startTask(_currentTask))
+            THROW_IE_EXCEPTION << InferenceEngine::details::as_status << StatusCode::REQUEST_BUSY << REQUEST_BUSY_str;
     }
 
     void StartAsync_ThreadUnsafe() override {

@@ -44,8 +44,10 @@ typedef int data_kind_t;
 enum {
     SRC = 0, WEI, BIA, DST, ACC,
     DATA, MEAN, VAR, SS,
+    GWEI,
     DAT_TOTAL };
 const char *data_kind2str(data_kind_t kind);
+data_kind_t fmt2data_kind(mkldnn_memory_format_t fmt);
 
 struct attr_t {
     enum round_mode_t {
@@ -68,17 +70,19 @@ struct attr_t {
     };
 
     struct post_ops_t {
-        enum kind_t { SUM, RELU, KIND_TOTAL };
+        enum kind_t { SUM, RELU, TANH, ELU, SQUARE, ABS, SQRT, LINEAR, BRELU,
+            SRELU, LOGISTIC, KIND_TOTAL };
         static kind_t str2kind(const char *str);
         static const char *kind2str(kind_t kind);
+        static mkldnn_alg_kind_t kind2mkldnn_kind(kind_t kind);
 
         struct entry_t {
             kind_t kind;
             union {
                 struct { float scale; } sum;
                 struct {
-                    // eltwise algorithm in future
-                    float scale, alpha, beta; // unused now
+                    mkldnn_alg_kind_t alg;
+                    float scale, alpha, beta;
                 } eltwise;
             };
         };
@@ -106,10 +110,13 @@ const size_t max_attr_len = 128;
 int str2attr(attr_t *attr, const char *str);
 void attr2str(const attr_t *attr, char *buffer);
 
+mkldnn_memory_format_t get_default_format(int ndims, data_kind_t kind);
 mkldnn_primitive_attr_t create_mkldnn_attr(const attr_t &attr, int scale_cnt,
         int scale_mask, const float *scales);
 inline mkldnn_primitive_attr_t create_mkldnn_attr(const attr_t &attr,
         int scale_cnt, const float *scales)
 { return create_mkldnn_attr(attr, scale_cnt, -1, scales); }
 
+void maybe_scale(float &d, float *scales, int oc, const attr_t &attr);
+void maybe_post_ops(float &d, float dst, const attr_t &attr);
 #endif

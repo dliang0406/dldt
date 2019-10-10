@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -21,12 +20,15 @@
 
 #include "details/ie_no_copy.hpp"
 
-
+/**
+ * @def INFERENCE_EXTENSION_API(TYPE)
+ * @brief Defines Inference Engine Extension API method
+ */
 
 #if defined(_WIN32) && defined(IMPLEMENT_INFERENCE_EXTENSION_API)
-#define INFERENCE_EXTENSION_API(TYPE) extern "C"  __declspec(dllexport) TYPE
+# define INFERENCE_EXTENSION_API(TYPE) extern "C"  __declspec(dllexport) TYPE
 #else
-#define INFERENCE_EXTENSION_API(TYPE) INFERENCE_ENGINE_API(TYPE)
+# define INFERENCE_EXTENSION_API(TYPE) INFERENCE_ENGINE_API(TYPE)
 #endif
 
 
@@ -129,15 +131,18 @@ public:
     virtual ~ILayerImplFactory() = default;
 
     /**
-     * @deprecated
+     * @deprecated Implement IShapeInferImpl extension for shape inference.
      * @brief Sets output shapes by input shapes.
      * @param inShapes Shapes of all inputs coming in this layer
      * @param outShapes Generated shapes coming from this layer given the input
      * @param resp Response descriptor
      * @return Status code
      */
-    virtual StatusCode getShapes(const std::vector<TensorDesc>& inShapes, std::vector<TensorDesc>& outShapes,
-                                 ResponseDesc* resp) noexcept = 0;
+    INFERENCE_ENGINE_DEPRECATED
+    virtual StatusCode getShapes(const std::vector<TensorDesc>& /*inShapes*/, std::vector<TensorDesc>& /*outShapes*/,
+                                 ResponseDesc* /*resp*/) noexcept {
+        return NOT_IMPLEMENTED;
+    }
 
     /**
      * @brief Gets all possible implementations for the given cnn Layer
@@ -156,14 +161,30 @@ class IShapeInferImpl {
 public:
     using Ptr = std::shared_ptr<IShapeInferImpl>;
 
+    virtual ~IShapeInferImpl() = default;
+
     /**
      * @brief check that reshape can be applied, that parameters and shapes are valid
      */
-    virtual StatusCode inferShapes(const std::vector<SizeVector>& inShapes,
-                                   const std::map<std::string, std::string>& params,
-                                   const std::map<std::string, Blob::Ptr>& blobs,
-                                   std::vector<SizeVector>& outShapes,
-                                   ResponseDesc* resp) noexcept = 0;
+    virtual StatusCode inferShapes(const std::vector<Blob::CPtr>& /*inBlobs*/,
+                                   const std::map<std::string, std::string>& /*params*/,
+                                   const std::map<std::string, Blob::Ptr>& /*blobs*/,
+                                   std::vector<SizeVector>& /*outShapes*/,
+                                   ResponseDesc* /*resp*/) noexcept { return NOT_IMPLEMENTED; }  // For backward-compatibility
+
+    /**
+     * @deprecated Use IShapeInferImpl::inferShapes(const std::vector<Blob::CPtr>&, const std::map<std::string, std::string>&,
+                                   const std::map<std::string, Blob::Ptr>&, std::vector<SizeVector>&, ResponseDesc* ) noexcept.
+     * @brief check that reshape can be applied, that parameters and shapes are valid
+     */
+    INFERENCE_ENGINE_DEPRECATED
+    virtual StatusCode inferShapes(const std::vector<SizeVector>& /*inShapes*/,
+                                   const std::map<std::string, std::string>& /*params*/,
+                                   const std::map<std::string, Blob::Ptr>& /*blobs*/,
+                                   std::vector<SizeVector>& /*outShapes*/,
+                                   ResponseDesc* /*resp*/) noexcept {
+        return NOT_IMPLEMENTED;
+    }
 };
 
 /**
@@ -191,13 +212,13 @@ public:
     virtual void Unload() noexcept = 0;
 
     /**
-     * @brief Gets the array with types of layers which are included in the extension
+     * @brief Fills passed array with types of layers which shape infer implementations are included in the extension
      * @param types Array to store the layer types
      * @param size Size of the layer types array
      * @param resp Response descriptor
      * @return Status code
      */
-    virtual StatusCode getPrimitiveTypes(char**& types, unsigned int& size, ResponseDesc* resp) noexcept = 0;
+    virtual StatusCode getShapeInferTypes(char**& types, unsigned int& size, ResponseDesc* resp) noexcept = 0;
 
     /**
      * @brief Gets shape propagation implementation for the given string-type of cnn Layer
@@ -218,9 +239,20 @@ public:
     virtual StatusCode getFactoryFor(ILayerImplFactory*& factory, const CNNLayer* cnnLayer,
                                      ResponseDesc* resp) noexcept = 0;
 
-    StatusCode getShapeInferImpl(IShapeInferImpl::Ptr& impl,
-                                 const char* type,
-                                 ResponseDesc* resp) noexcept override {
+    /**
+     * @brief Fills passed array with types of layers which kernel implementations are included in the extension
+     * @param types Array to store the layer types
+     * @param size Size of the layer types array
+     * @param resp Response descriptor
+     * @return Status code
+     */
+    virtual StatusCode getPrimitiveTypes(char**& types, unsigned int& size, ResponseDesc* resp) noexcept = 0;
+
+    StatusCode getShapeInferTypes(char**&, unsigned int&, ResponseDesc*) noexcept override {
+        return NOT_IMPLEMENTED;
+    };
+
+    StatusCode getShapeInferImpl(IShapeInferImpl::Ptr&, const char*, ResponseDesc*) noexcept override {
         return NOT_IMPLEMENTED;
     };
 };

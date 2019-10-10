@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -12,15 +11,24 @@
 #include "ie_data.h"
 #include "ie_blob.h"
 #include "ie_api.h"
+#include "ie_input_info.hpp"
 #include "description_buffer.hpp"
 #include <string>
 #include <vector>
 
+#include "cnn_network_stats_impl.hpp"
+
 namespace InferenceEngine {
+namespace ShapeInfer {
+class Reshaper;
+
+using ReshaperPtr = std::shared_ptr<Reshaper>;
+}  // namespace ShapeInfer
 namespace details {
 class INFERENCE_ENGINE_API_CLASS(CNNNetworkImpl) : public ICNNNetwork {
 public:
     CNNNetworkImpl();
+    ~CNNNetworkImpl() override;
     Precision getPrecision() const noexcept override {
         return precision;
     }
@@ -43,6 +51,10 @@ public:
 
     void setInputInfo(InputInfo::Ptr data) {
         _inputData[data->name()] = data;
+    }
+
+    void removeInputInfo(const std::string& name) {
+        _inputData.erase(name);
     }
 
     void getName(char* pName, size_t len) const noexcept override {
@@ -78,10 +90,11 @@ public:
 
     void addLayer(const CNNLayerPtr& layer) noexcept override;
 
-    StatusCode getLayerByName(const char* layerName, CNNLayerPtr& out, ResponseDesc* resp) const noexcept override;
+    void removeLayer(const std::string& layerName);
 
-    // deprecated, as there is no ResponseDesc to put error message
-    StatusCode setBatchSize(const size_t size) noexcept override;
+    void removeData(const std::string& dataName);
+
+    StatusCode getLayerByName(const char* layerName, CNNLayerPtr& out, ResponseDesc* resp) const noexcept override;
 
     // public version
     StatusCode setBatchSize(size_t size, ResponseDesc* responseDesc) noexcept override;
@@ -91,6 +104,7 @@ public:
 
     size_t getBatchSize() const noexcept override;
 
+    IE_SUPPRESS_DEPRECATED_START
     void setTargetDevice(TargetDevice device) noexcept override {
         _targetDevice = device;
     }
@@ -98,12 +112,19 @@ public:
     TargetDevice getTargetDevice() const noexcept override {
         return _targetDevice;
     }
+    IE_SUPPRESS_DEPRECATED_END
 
     StatusCode addOutput(const std::string& layerName, size_t outputIndex, ResponseDesc* resp) noexcept override;
 
     void resolveOutput();
 
     void addOutput(const std::string& dataName);
+
+    StatusCode getStats(ICNNNetworkStats** stats, ResponseDesc* resp) const noexcept override {
+        if (stats == nullptr) return StatusCode::PARAMETER_MISMATCH;
+        *stats = _stats.get();
+        return StatusCode::OK;
+    }
 
     void Release() noexcept override {
         delete this;
@@ -116,6 +137,8 @@ public:
     StatusCode
     AddExtension(const InferenceEngine::IShapeInferExtensionPtr &extension, InferenceEngine::ResponseDesc *resp) noexcept override;
 
+    StatusCode serialize(const std::string &xmlPath, const std::string &binPath, ResponseDesc* resp) const noexcept override;
+
 protected:
     Precision precision {Precision::MIXED};
     std::map<std::string, DataPtr> _data;
@@ -126,7 +149,8 @@ protected:
     /// @brief
     TargetDevice _targetDevice;
     DataPtr _emptyData;
-    std::vector<IShapeInferExtensionPtr> _shapeInferExts;
+    ShapeInfer::ReshaperPtr _reshaper;
+    CNNNetworkStatsImplPtr _stats;
 };
 
 

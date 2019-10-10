@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -25,9 +25,17 @@ class BasicError(Exception):
     """
 
     def __str__(self):
+        cause = ""
+        if self.__cause__:
+            cause = self.__cause__.__str__() + '\n'
         if len(self.args) <= 1:
-            return Exception.__str__(self)
-        return self.args[0].format(*self.args[1:])
+            return cause + Exception.__str__(self)
+        return cause + self.args[0].format(*self.args[1:])  # pylint: disable=unsubscriptable-object
+
+
+class FrameworkError(BasicError):
+    """ User-friendly error: raised when the error on the framework side. """
+    pass
 
 
 class Error(BasicError):
@@ -38,3 +46,4 @@ class Error(BasicError):
 class InternalError(BasicError):
     """ Not user-friendly error: user cannot fix it and it points to the bug inside MO. """
     pass
+

@@ -1,12 +1,13 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include "ie_util_internal.hpp"
 #include "graph_tools.hpp"
-#include "caseless.hpp"
+#include "details/caseless.hpp"
 #include "ie_utils.hpp"
+#include "ie_plugin.hpp"
+#include "ie_ihetero_plugin.hpp"
 
 #include <ie_layers.h>
 
@@ -20,6 +21,50 @@
 #include <memory>
 #include <utility>
 #include <iomanip>
+
+using namespace InferenceEngine;
+using namespace details;
+
+IE_SUPPRESS_DEPRECATED_START
+
+IHeteroInferencePlugin::~IHeteroInferencePlugin() {
+}
+
+IHeteroDeviceLoader::~IHeteroDeviceLoader() {
+}
+
+QueryNetworkResult::QueryNetworkResult() : rc(OK) {
+}
+
+const QueryNetworkResult & QueryNetworkResult::operator= (const QueryNetworkResult & q) {
+    supportedLayers = q.supportedLayers;
+    supportedLayersMap = q.supportedLayersMap;
+    rc = q.rc;
+    resp = q.resp;
+
+    return *this;
+}
+
+QueryNetworkResult & QueryNetworkResult::operator= (QueryNetworkResult && q) {
+    supportedLayers = q.supportedLayers;
+    supportedLayersMap = q.supportedLayersMap;
+    rc = q.rc;
+    resp = q.resp;
+
+    return *this;
+}
+
+QueryNetworkResult::QueryNetworkResult(const QueryNetworkResult & instance) :
+    supportedLayers(instance.supportedLayers),
+    supportedLayersMap(instance.supportedLayersMap),
+    rc(instance.rc),
+    resp(instance.resp) {
+}
+
+QueryNetworkResult::~QueryNetworkResult() {
+}
+
+IE_SUPPRESS_DEPRECATED_END
 
 namespace {
 
@@ -49,26 +94,38 @@ InferenceEngine::LayerComplexity getComplexity(const InferenceEngine::CNNLayerPt
                                  std::function<void(CNNLayer &)>> layerComplexityLookup = {
         {"Convolution", [&](CNNLayer &l) {
             auto* conv = dynamic_cast<ConvolutionLayer*>(&l);
-            unsigned long filter_m = conv->_kernel_x * conv->_kernel_y * (inDims[1] / conv->_group);
+            if (conv == nullptr) {
+                THROW_IE_EXCEPTION << "Layer " << l.name << " is not instance of ConvolutionLayer class";
+            }
+            unsigned long filter_m = conv->_kernel[X_AXIS] * conv->_kernel[Y_AXIS] * (inDims[1] / conv->_group);
             flops = 2 * out_size * filter_m;
             params = filter_m * conv->_out_depth + conv->_out_depth;
         }},
 
         {"Deconvolution", [&](CNNLayer &l) {
             auto* deconv = dynamic_cast<DeconvolutionLayer*>(&l);
-            unsigned long filter_m = deconv->_kernel_x * deconv->_kernel_y * (inDims[1] / deconv->_group);
+            if (deconv == nullptr) {
+                THROW_IE_EXCEPTION << "Layer " << l.name << " is not instance of DeconvolutionLayer class";
+            }
+            unsigned long filter_m = deconv->_kernel[X_AXIS] * deconv->_kernel[Y_AXIS] * (inDims[1] / deconv->_group);
             flops = 2 * out_size * filter_m;
             params = filter_m * deconv->_out_depth + deconv->_out_depth;
         }},
 
         {"FullyConnected", [&](CNNLayer &l) {
             auto* fc = dynamic_cast<FullyConnectedLayer*>(&l);
+            if (fc == nullptr) {
+                THROW_IE_EXCEPTION << "Layer " << l.name << " is not instance of FullyConnectedLayer class";
+            }
             flops = 2 * in_size * fc->_out_num;
             params = (in_size + 1) * fc->_out_num;
         }},
 
         {"Norm", [&](CNNLayer &l) {
             auto* lrn = dynamic_cast<NormLayer*>(&l);
+            if (lrn == nullptr) {
+                THROW_IE_EXCEPTION << "Layer " << l.name << " is not instance of NormLayer class";
+            }
             int size = lrn->_size;
             int flopsPerElement = lrn->_isAcrossMaps ? 2 * size * size : 2 * size;
 
@@ -77,6 +134,9 @@ InferenceEngine::LayerComplexity getComplexity(const InferenceEngine::CNNLayerPt
 
         {"Pooling", [&](CNNLayer &l) {
             auto* pool = dynamic_cast<PoolingLayer*>(&l);
+            if (pool == nullptr) {
+                THROW_IE_EXCEPTION << "Layer " << l.name << " is not instance of PoolingLayer class";
+            }
             if (pool->_type == PoolingLayer::PoolType::ROI) {
                 // real kernel sizes are read from weights, so approximation is used.
                 unsigned long kernel_w = inDims[2] / outDims[2];
@@ -84,12 +144,15 @@ InferenceEngine::LayerComplexity getComplexity(const InferenceEngine::CNNLayerPt
 
                 flops = out_size * kernel_h * kernel_w;
             } else {
-                flops = out_size * (pool->_kernel_y * pool->_kernel_y);
+                flops = out_size * (pool->_kernel[Y_AXIS] * pool->_kernel[Y_AXIS]);
             }
         }},
 
         {"Eltwise", [&](CNNLayer &l) {
             auto* eltwise = dynamic_cast<EltwiseLayer*>(&l);
+            if (eltwise == nullptr) {
+                THROW_IE_EXCEPTION << "Layer " << l.name << " is not instance of EltwiseLayer class";
+            }
             flops = in_size * (2 * eltwise->insData.size() - 1);
         }},
 
@@ -126,7 +189,7 @@ std::unordered_map<std::string,
     // Get all network inputs
     CNNLayerSet inputs;
     for (auto input : networkInputs) {
-        for (auto l : input.second->getInputData()->inputTo) {
+        for (auto l : input.second->getInputData()->getInputTo()) {
             inputs.insert(l.second);
         }
     }

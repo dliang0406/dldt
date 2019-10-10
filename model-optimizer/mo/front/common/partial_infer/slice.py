@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -15,39 +15,21 @@
 """
 
 import numpy as np
-import logging as log
 
 from mo.utils.error import Error
-from mo.utils.utils import refer_to_faq_msg
-
-
-def tf_slice_infer(node):
-    input = node.in_node(0)
-    begin = node.in_node(1)
-    size = node.in_node(2)
-    output = node.out_node()
-
-    if input.value is None or begin.value is None or size.value is None:
-        return
-
-    if begin.value.size > 1 or size.value.size > 1:
-        log.error("Slice operation doesn't support parameters (begin, size) with size more then 1")
-        log.error("  Begin : {}".format(begin.value))
-        log.error("  Size  : {}".format(size.value))
-        return
-
-    # if the 'size' value is equal to -1 then all remaining elements in dimension are included in the slice.
-    # refer to TensorFlow documentation for more details
-    if size.value.item() == -1:
-        size.value = np.array(input.shape[0] - begin.value.item())
-    output.value = input.value[begin.value.item():(begin.value.item() + size.value.item())]
-    output.shape = np.array(output.value.shape, dtype=np.int64)
 
 
 def tf_strided_slice_infer(node):
-    begin_id = node.in_node(1).value
-    end_id = node.in_node(2).value
-    stride = node.in_node(3).value
+    if node.in_node(1).value is None or node.in_node(2).value is None:
+        raise Error('Strided slice layer supports only constant begin and end inputs')
+    begin_id = node.in_node(1).value.copy()
+    end_id = node.in_node(2).value.copy()
+    if len(node.in_nodes()) > 3:
+        if node.in_node(3).value is None:
+            raise Error('Strided slice layer supports only constant stride input')
+        stride = node.in_node(3).value
+    else:
+        stride = []
 
     shape = node.in_node(0).shape
 
@@ -57,47 +39,78 @@ def tf_strided_slice_infer(node):
     convert_negative_indices(begin_id, shape)
     convert_negative_indices(end_id, shape)
 
-    test_bit = lambda val, offset: ((1 << offset) & val != 0)
-
     slice_idx = []
-    shrink_axis_mask = []
-    ellipsis_mask = []
-    new_axis_mask = []
-    dims = len(begin_id)
+    dims = np.amax(np.array([len(begin_id), len(end_id), len(stride),
+                             len(node.shrink_axis_mask), len(node.new_axis_mask), len(node.ellipsis_mask),
+                             len(node.begin_mask), len(node.end_mask)]))
+
+    # make mask correct length
+    def extend_mask(in_mask, fin_len, zeros=True):
+        mask = list(in_mask)
+        if len(mask) < fin_len:
+            if zeros:
+                mask.extend(np.zeros(dims-len(mask), dtype=np.int32))
+            else:
+                mask.extend(np.ones(dims-len(mask), dtype=np.int32))
+        return np.array(mask, dtype=np.int32)
+
+    for mask in {'new_axis_mask', 'shrink_axis_mask', 'ellipsis_mask'}:
+        node[mask] = extend_mask(node[mask], dims)
+    node.begin_mask = extend_mask(node.begin_mask, dims, False)
+    node.end_mask = extend_mask(node.end_mask, dims, False)
+
+    old_idx = 0
+    ellips_ext = 0
+    id_em = 0
     for idx in range(dims):
-        l = begin_id[idx] if not test_bit(node.begin_mask, idx) else 0
-        r = end_id[idx] if not test_bit(node.end_mask, idx) else shape[idx]
-
-        # Check shrink_axis_mask
-        shrink_axis_mask.append(test_bit(node.shrink_axis_mask, idx))
-        if shrink_axis_mask[idx]:
-            l, r = l, l + 1
-
-        # Check new_axis_mask
-        new_axis_mask.append(test_bit(node.new_axis_mask, idx))
-        if new_axis_mask[idx]:
+        if node.new_axis_mask[idx]:
             slice_idx.append(np.newaxis)
+        elif node.ellipsis_mask[idx]:
+            ellips_ext = len(shape) - (dims - np.count_nonzero(node.new_axis_mask) - 1)
+            id_em = idx
+            for i in range(0, ellips_ext):
+                slice_idx.append(slice(0, shape[old_idx], 1))
+                old_idx = old_idx + 1
+        else:
+            s = stride[idx] if len(stride) > idx else 1
+            def_beg = 0 if s > 0 else -1
+            def_end = shape[old_idx] if s > 0 else -shape[old_idx]-1
+            l = begin_id[idx] if node.begin_mask[idx] and idx < len(begin_id) else def_beg
+            r = end_id[idx] if node.end_mask[idx] and idx < len(end_id) else def_end
 
-        # Check ellipsis_mask
-        ellipsis_mask.append(test_bit(node.ellipsis_mask, idx))
-        if ellipsis_mask[idx]:
-            shrink_axis_mask[idx] = False
-            l, r = 0, shape[idx]
-
-        slice_idx.append(slice(l, r, stride[idx]))
+            # Check shrink_axis_mask
+            if node.shrink_axis_mask[idx] and idx < len(shape):
+                slice_idx.append(slice(l, l+1, s))
+            else:
+                slice_idx.append(slice(l, r, s))
+            old_idx = old_idx + 1
 
     value = node.in_node(0).value if node.in_node(0).value is not None else np.zeros(shape)
-    value = value[slice_idx]
+    # fix for the warning: "FutureWarning: Using a non-tuple sequence for multidimensional indexing is deprecated use
+    # `arr[tuple(seq)]` instead of `arr[seq]`"
+    value = value[tuple(slice_idx)]
 
-    for idx, flag in reversed(list(enumerate(shrink_axis_mask))):
+    for idx, flag in reversed(list(enumerate(node.shrink_axis_mask))):
         if flag:
-            value = np.squeeze(value, idx)
+            if ellips_ext > 0 and idx > id_em:
+                idx = idx + ellips_ext - 1
+            try:
+                value = np.squeeze(value, idx)
+            except ValueError:
+                # ignore this error
+                continue
 
     node['slices'] = np.array(slice_idx)
-    node['shrink_axis_mask'] = np.array(shrink_axis_mask)
+    for attr in ('shrink_axis_mask', 'new_axis_mask', 'ellipsis_mask', 'begin_mask', 'end_mask'):
+        node[attr] = np.array(node[attr], dtype=np.int32)
 
     node.out_node().value = np.array(value) if node.in_node(0).value is not None else None
-    node.out_node().shape = np.array(value.shape)
+    node.out_node().shape = np.array(value.shape, dtype=np.int64)
+
+    # change precision to I32 for begin, end, stride inputs
+    for i in range(1, len(node.in_nodes())):
+        inp = node.in_node(i)
+        inp["force_precision"] = "I32"
 
 
 def convert_negative_indices(indices: np.array, shape: np.array):
@@ -130,16 +143,18 @@ def caffe_slice_infer(node):
     slices = []
     for slice_point in node.slice_point:
         if slice_point <= prev:
-            raise Error('Check failed for the layer {}. Slice points should be ordered in increasing manner. '.format(node.id) +
-                        'Current slice point {} is not greater than the previous slice point {}. '.format(slice_point, prev) +
-                        'Please verify your model correctness')
+            raise Error(
+                'Check failed for the layer {}. Slice points should be ordered in increasing manner. '.format(node.id) +
+                'Current slice point {} is not greater than the previous slice point {}. '.format(slice_point, prev) +
+                'Please verify your model correctness')
         slices.append(slice_point - prev)
         prev = slice_point
 
     slices.append(bottom_slice_axis - prev)
     if sum(slices) != bottom_slice_axis:
-        raise Error('Check failed for the layer {}. Sum of slices points {} does not equal '.format(node.id, sum(slices)) +
-                    'to the value of input blob shape by the given slice axis {}'.format(bottom_slice_axis))
+        raise Error(
+            'Check failed for the layer {}. Sum of slices points {} does not equal '.format(node.id, sum(slices)) +
+            'to the value of input blob shape by the given slice axis {}'.format(bottom_slice_axis))
     for i in range(len(node.out_nodes())):
         new_shape = np.array(top_shape, dtype=np.int64)
         new_shape[slice_axis] = slices[i]

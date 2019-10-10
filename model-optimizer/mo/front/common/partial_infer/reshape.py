@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -14,9 +14,9 @@
  limitations under the License.
 """
 
-import logging as log
-
-import numpy as np
+from mo.front.common.partial_infer.utils import int64_array
+from mo.graph.perm_inputs import PermuteInputs
+from mo.utils.error import Error
 
 
 def tf_reshape_shape_infer(node):
@@ -27,10 +27,14 @@ def tf_reshape_shape_infer(node):
     if node.in_node(0).shape is None:
         return None
 
-    input_shape = node.in_node(0).shape
-    reshape_output = node.in_node(1).value if len(node.in_nodes()) > 1 else node.dim
+    assert len(node.in_nodes()) == 2, 'The Reshape operation {} must have 2 inputs'.format(node.name)
+
+    input_shape = node.in_port(0).data.get_shape()
+    reshape_output = node.in_port(1).data.get_value()
+
     if node.in_node(0).shape is None:
         return None
+
     total = 1
     for index, i in enumerate(input_shape):
         total *= i
@@ -58,9 +62,10 @@ def tf_reshape_shape_infer(node):
         out_shape_total *= i
 
     if total != out_shape_total:
-        log.error(
-            "Number of elements in input {} and output {} of reshape node {} mismatch".format(input_shape, output_shape,
-                                                                                              node.name))
-        return None
+        raise Error("Number of elements in input {} and output {} of reshape node {} mismatch"
+                    "".format(input_shape, output_shape, node.name))
 
-    return np.array(output_shape, dtype=np.int64)
+    PermuteInputs().set_input_permutation(node.in_node(1), node, 'output:0', 'shape')
+
+    output_shape = int64_array(output_shape)
+    return output_shape

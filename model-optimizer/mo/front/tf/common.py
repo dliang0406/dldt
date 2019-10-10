@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 """
 
 import numpy as np
-from tensorflow.core.framework import types_pb2 as tf_types
+from tensorflow.core.framework import types_pb2 as tf_types  # pylint: disable=no-name-in-module
 
 # mapping between TF data type and numpy data type and function to extract data from TF tensor
 _tf_np_mapping = [('DT_BOOL', np.bool, lambda pb: pb.bool_val, lambda x: bool_cast(x)),

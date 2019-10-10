@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -14,26 +14,28 @@
  limitations under the License.
 """
 
-import networkx as nx
-import numpy as np
 import logging as log
 
+import numpy as np
+
+from mo.front.common.partial_infer.utils import int64_array
+from mo.graph.graph import Graph
+from mo.ops.const import Const
 from mo.ops.op import Op
 
 
 class FlattenONNX(Op):
-    op = 'Flatten'
+    op = 'FlattenONNX'
     enabled = True
 
-    def __init__(self, graph: nx.MultiDiGraph, attrs: dict):
+    def __init__(self, graph: Graph, attrs: dict):
         super().__init__(graph, {
             'type': 'Reshape',
             'op': __class__.op,
             'infer': __class__.infer,
+            'in_ports_count': 2,
+            'out_ports_count': 1,
         }, attrs)
-
-    def supported_attrs(self):
-        return ['axis', ('dim', lambda node: ','.join(map(str, node['dim'])))]
 
     @staticmethod
     def infer(node):
@@ -51,11 +53,14 @@ class FlattenONNX(Op):
             return
 
         if len(node.in_nodes()) != 1:
-            log.debug('Can\'t calculate output shape for {} node. Number of input nodes should be equal 1 instead of {}'.format(node.name, len(node.in_nodes())))
+            log.debug(
+                'Can\'t calculate output shape for {} node. Number of input nodes should be equal 1 instead of {}'.format(
+                    node.name, len(node.in_nodes())))
             return
 
         axis = node.axis
         shape = node.in_node(0).shape
         dim = [np.prod(shape[0:axis]), np.prod(shape[axis:])]
-        node['dim'] = np.array(dim)
-        node.out_node().shape = np.array(dim)
+        node.out_node().shape = int64_array(dim)
+        if node.in_node(0).has_valid('value'):
+            node.out_node().value = np.reshape(node.in_node(0).value, dim)

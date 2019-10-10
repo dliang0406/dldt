@@ -70,7 +70,7 @@ status_t post_ops_t::append_eltwise(float scale, alg_kind_t alg, float alpha,
     bool known_alg = one_of(alg, eltwise_relu, eltwise_tanh, eltwise_elu,
             eltwise_square, eltwise_abs, eltwise_sqrt, eltwise_linear,
             eltwise_bounded_relu, eltwise_soft_relu, eltwise_logistic,
-            eltwise_clamp);
+            eltwise_clamp, eltwise_exp, eltwise_not);
     if (!known_alg)
         return invalid_arguments;
 
@@ -88,7 +88,28 @@ status_t post_ops_t::append_eltwise(float scale, alg_kind_t alg, float alpha,
     return success;
 }
 
+status_t post_ops_t::append_depthwise(alg_kind_t alg,
+        const float* weights_data, const float* biases_data) {
+    using namespace mkldnn::impl::alg_kind;
+    bool known_alg = one_of(alg, depthwise_scale_shift, depthwise_prelu);
+    if (!known_alg)
+        return invalid_arguments;
+
+    if (len_ == capacity)
+        return out_of_memory;
+
+    entry_[len_].kind = primitive_kind::depthwise;
+    entry_[len_].depthwise.alg = alg;
+    entry_[len_].depthwise.weights_data = weights_data;
+    entry_[len_].depthwise.biases_data = biases_data;
+
+    len_++;
+
+    return success;
+}
+
 status_t post_ops_t::append_dw_conv(int in_h, int in_w, int ker_h, int ker_w, int str_h, int str_w,
+                                    mkldnn::impl::data_type_t in_dt,
                                     const float* weights_data,
                                     const float* biases_data) {
     if (len_ == capacity)
@@ -101,8 +122,28 @@ status_t post_ops_t::append_dw_conv(int in_h, int in_w, int ker_h, int ker_w, in
     entry_[len_].dw_conv.ker_w = ker_w;
     entry_[len_].dw_conv.str_h = str_h;
     entry_[len_].dw_conv.str_w = str_w;
+    entry_[len_].dw_conv.in_dt = in_dt;
     entry_[len_].dw_conv.weights_data = weights_data;
     entry_[len_].dw_conv.biases_data = biases_data;
+
+    len_++;
+
+    return success;
+}
+
+status_t post_ops_t::append_binarization(alg_kind_t alg, const float* weights_data, const float* output_mask_data) {
+    using namespace mkldnn::impl::alg_kind;
+    bool known_alg = one_of(alg, binarization_depthwise);
+    if (!known_alg)
+        return invalid_arguments;
+
+    if (len_ == capacity)
+        return out_of_memory;
+
+    entry_[len_].kind = primitive_kind::binarization;
+    entry_[len_].binarization.alg = alg;
+    entry_[len_].binarization.weights_data = weights_data;
+    entry_[len_].binarization.output_mask_data = output_mask_data;
 
     len_++;
 
@@ -293,23 +334,66 @@ status_t mkldnn_post_ops_get_params_eltwise(const post_ops_t *post_ops,
     return success;
 }
 
+status_t mkldnn_primitive_attr_set_rnn_data_qparams(
+        primitive_attr_t *attr, const float scale, const float shift) {
+    if (attr == nullptr)
+        return invalid_arguments;
+
+    return attr->rnn_data_qparams_.set(scale, shift);
+}
+
+status_t mkldnn_primitive_attr_set_rnn_weights_qparams(
+        primitive_attr_t *attr, int count, int mask, const float *scales) {
+    bool ok = !any_null(attr, scales) && count > 0 && mask >= 0;
+    if (!ok)
+        return invalid_arguments;
+
+    return attr->rnn_weights_qparams_.set(count, mask, scales);
+}
+
+status_t mkldnn_post_ops_append_depthwise(post_ops_t *post_ops,
+        alg_kind_t kind, const float* weights_data, const float* biases_data) {
+    if (post_ops == nullptr)
+        return invalid_arguments;
+
+    return post_ops->append_depthwise(kind, weights_data, biases_data);
+}
+
+status_t mkldnn_post_ops_get_params_depthwise(const post_ops_t *post_ops,
+        int index, alg_kind_t *alg, const float** weights_data, const float** biases_data) {
+    bool ok = true
+        && simple_get_params_check(post_ops, index, primitive_kind::depthwise)
+        && !any_null(alg, weights_data, biases_data);
+    if (!ok)
+        return invalid_arguments;
+
+    const auto &e = post_ops->entry_[index].depthwise;
+    *alg = e.alg;
+    *weights_data = e.weights_data;
+    *biases_data = e.biases_data;
+
+    return success;
+}
+
 status_t mkldnn_post_ops_append_dw_conv(post_ops_t *post_ops,
                                         int in_h, int in_w, int ker_h, int ker_w, int str_h, int str_w,
+                                        mkldnn::impl::data_type_t in_dt,
                                         const float* weights_data,
                                         const float* biases_data) {
     if (post_ops == nullptr)
         return invalid_arguments;
 
-    return post_ops->append_dw_conv(in_h, in_w, ker_h, ker_w, str_h, str_w, weights_data, biases_data);
+    return post_ops->append_dw_conv(in_h, in_w, ker_h, ker_w, str_h, str_w, in_dt, weights_data, biases_data);
 }
 
 status_t mkldnn_post_ops_get_params_dw_conv(const post_ops_t *post_ops,
                                             int index, int *in_h, int *in_w, int *ker_h, int *ker_w, int *str_h, int *str_w,
+                                            mkldnn::impl::data_type_t* in_dt,
                                             const float** weights_data,
                                             const float** biases_data) {
     bool ok = true
               && simple_get_params_check(post_ops, index, primitive_kind::convolution)
-              && !any_null(in_h, in_w, ker_h, ker_w, str_h, str_w, weights_data, biases_data);
+              && !any_null(in_h, in_w, ker_h, ker_w, str_h, str_w, in_dt, weights_data, biases_data);
     if (!ok)
         return invalid_arguments;
 
@@ -320,8 +404,33 @@ status_t mkldnn_post_ops_get_params_dw_conv(const post_ops_t *post_ops,
     *ker_w = e.ker_w;
     *str_h = e.str_h;
     *str_w = e.str_w;
+    *in_dt = e.in_dt;
     *weights_data = e.weights_data;
     *biases_data = e.biases_data;
+
+    return success;
+}
+
+status_t mkldnn_post_ops_append_binarization(post_ops_t *post_ops, alg_kind_t kind, const float* weights_data,
+        const float* output_mask_data) {
+    if (post_ops == nullptr)
+        return invalid_arguments;
+
+    return post_ops->append_binarization(kind, weights_data, output_mask_data);
+}
+
+status_t mkldnn_post_ops_get_params_binarization(const post_ops_t *post_ops, int index, alg_kind_t *alg,
+        const float** weights_data, const float** output_mask_data) {
+    bool ok = true
+        && simple_get_params_check(post_ops, index, primitive_kind::binarization)
+        && !any_null(alg, weights_data, output_mask_data);
+    if (!ok)
+        return invalid_arguments;
+
+    const auto &e = post_ops->entry_[index].binarization;
+    *alg = e.alg;
+    *weights_data = e.weights_data;
+    *output_mask_data = e.output_mask_data;
 
     return success;
 }

@@ -1,23 +1,23 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #pragma once
 
-#include <mkldnn/mkldnn_generic_primitive.hpp>
+#include <ie_iextension.h>
 #include <ie_common.h>
 #include <mkldnn_node.h>
 #include <string>
 #include <vector>
 #include <memory>
+#include <map>
 
 namespace MKLDNNPlugin {
 
 class MKLDNNGenericNode : public MKLDNNNode {
 public:
-    MKLDNNGenericNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng);
-    ~MKLDNNGenericNode() override;
+    MKLDNNGenericNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket);
+    ~MKLDNNGenericNode() = default;
 
     void getSupportedDescriptors() override;
     void initSupportedPrimitiveDescriptors() override;
@@ -30,22 +30,20 @@ public:
     }
 
     void initDescriptor(const InferenceEngine::LayerConfig& config) override;
-    void initOptimalPrimitiveDescriptor() override;
 
     void execLayer();
     void cleanup() override;
 
 
 protected:
-    std::shared_ptr<InferenceEngine::MKLDNNPlugin::IMKLDNNGenericPrimitive> genericPrimitive;
     InferenceEngine::ILayerImplFactory::Ptr extFactory;
+    InferenceEngine::IShapeInferImpl::Ptr extShapeInference;
     std::vector<InferenceEngine::ILayerImpl::Ptr> impls;
+    std::map<std::string, std::string> params;
+    std::map<std::string, InferenceEngine::Blob::Ptr> blobs;
 
 private:
     static Register<MKLDNNGenericNode> reg;
-    MKLDNNExtensionManager::Ptr extensionManager;
-    std::vector<InferenceEngine::MKLDNNPlugin::MKLDNNPrimitiveMemory> inputs;
-    std::vector<InferenceEngine::MKLDNNPlugin::MKLDNNPrimitiveMemory> outputs;
 };
 
 }  // namespace MKLDNNPlugin

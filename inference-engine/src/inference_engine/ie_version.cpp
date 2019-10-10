@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -11,8 +10,9 @@ INFERENCE_ENGINE_API(const Version*) GetInferenceEngineVersion() noexcept {
     // Use local static variable to make sure it is always properly initialized
     // even if called from global constructor
     static Version inferenceEngineVersion = {
-        {1, 2},  // inference engine API version
-        CI_BUILD_NUMBER
+        {2, 1},  // inference engine API version
+        CI_BUILD_NUMBER,
+        "API"
     };
     return &inferenceEngineVersion;
 }

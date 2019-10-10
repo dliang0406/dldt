@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -14,10 +14,9 @@
  limitations under the License.
 """
 
-from mo.ops.activation import Activation
+from extensions.ops.activation_ops import Elu
 from mo.front.extractor import FrontExtractorOp
 from mo.front.onnx.extractors.utils import onnx_attr
-
 
 
 class EluFrontExtractor(FrontExtractorOp):
@@ -27,5 +26,5 @@ class EluFrontExtractor(FrontExtractorOp):
     @staticmethod
     def extract(node):
         alpha = onnx_attr(node, 'alpha', 'f', default=1.0)
-        Activation.update_node_stat(node, {'operation': 'elu', 'alpha': alpha})
+        Elu.update_node_stat(node, {'alpha': alpha})
         return EluFrontExtractor.enabled

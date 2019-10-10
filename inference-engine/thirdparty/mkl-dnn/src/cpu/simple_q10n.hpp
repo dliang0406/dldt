@@ -25,6 +25,8 @@
 #include "type_helpers.hpp"
 #include "utils.hpp"
 
+#include "bfloat16_utils.hpp"
+
 namespace mkldnn {
 namespace impl {
 namespace cpu {
@@ -88,14 +90,36 @@ template <typename in_t> struct qz_b0<in_t, float> {
 /* Quantization */
 template <typename in_t, typename out_t> struct qz {
     out_t operator()(in_t in, out_t out, float alpha, float beta,
-            round_mode_t rmode)
-    { return round_and_saturate<out_t>(alpha * in + beta * out, rmode); }
+            round_mode_t rmode) {
+        return round_and_saturate<out_t>(
+                alpha * in + (beta ? beta * out : 0), rmode);
+    }
 };
 
 template <typename in_t> struct qz<in_t, float> {
     float operator()(in_t in, float out, float alpha, float beta,
             round_mode_t rmode)
-    { return alpha * in + beta * out; }
+    { return alpha * in + (beta ? beta * out : 0); }
+};
+
+template <> struct qz<mkldnn_bfloat16_t, mkldnn_bfloat16_t> {
+    mkldnn_bfloat16_t operator()(mkldnn_bfloat16_t in, mkldnn_bfloat16_t out, float alpha, float beta, round_mode_t rmode) {
+        return bf16_cvt_utils::cvt_float_to_bfloat16(alpha * bf16_cvt_utils::cvt_bfloat16_to_float(in) +
+                (beta ? beta * bf16_cvt_utils::cvt_bfloat16_to_float(out) : 0));
+    }
+};
+
+template <> struct qz<float, mkldnn_bfloat16_t> {
+    mkldnn_bfloat16_t operator()(float in, mkldnn_bfloat16_t out, float alpha, float beta, round_mode_t rmode) {
+        return bf16_cvt_utils::cvt_float_to_bfloat16(alpha * in
+                + (beta ? beta * bf16_cvt_utils::cvt_bfloat16_to_float(out) : 0));
+    }
+};
+
+template <> struct qz<mkldnn_bfloat16_t, float> {
+    float operator()(mkldnn_bfloat16_t in, float out, float alpha, float beta,
+            round_mode_t rmode)
+    { return alpha * bf16_cvt_utils::cvt_bfloat16_to_float(in) + (beta ? beta * out : 0); }
 };
 
 }

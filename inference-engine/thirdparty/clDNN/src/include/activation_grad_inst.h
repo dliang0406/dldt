@@ -16,23 +16,22 @@
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma once
-#include "api/CPP/activation_grad.hpp"
+#include "api/activation_grad.hpp"
 #include "primitive_inst.h"
+#include <string>
 
-namespace cldnn
-{
+namespace cldnn {
 
 template <>
-struct typed_program_node<activation_grad> : public typed_program_node_base<activation_grad>
-{
+struct typed_program_node<activation_grad> : public typed_program_node_base<activation_grad> {
     using parent = typed_program_node_base<activation_grad>;
 
 public:
     using parent::parent;
 
-    decltype(auto) input() const { return get_dependency(0); }
-    decltype(auto) input_arg() const { return get_dependency(1); }
-    decltype(auto) slope_input() const { return get_dependency(2); }
+    program_node& input() const { return get_dependency(0); }
+    program_node& input_arg() const { return get_dependency(1); }
+    program_node& slope_input() const { return get_dependency(2); }
 
     bool is_parameterized() const { return !typed_desc()->additional_params_input.empty(); }
 };
@@ -40,20 +39,20 @@ public:
 using activation_grad_node = typed_program_node<activation_grad>;
 
 template <>
-class typed_primitive_inst<activation_grad> : public typed_primitive_inst_base<activation_grad>
-{
+class typed_primitive_inst<activation_grad> : public typed_primitive_inst_base<activation_grad> {
     using parent = typed_primitive_inst_base<activation_grad>;
 
 public:
     static layout calc_output_layout(activation_grad_node const& node);
     static std::string to_string(activation_grad_node const& node);
+
 public:
     typed_primitive_inst(network_impl& network, activation_grad_node const& node);
 
-    decltype(auto) slope_memory() const { return dep_memory(2); }
+    memory_impl& slope_memory() const { return dep_memory(2); }
 
     bool is_parameterized() const { return !argument.additional_params_input.empty(); }
 };
 
 using activation_grad_inst = typed_primitive_inst<activation_grad>;
-}
+}  // namespace cldnn

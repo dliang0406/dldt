@@ -1,14 +1,14 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include <gtest/gtest.h>
 #include <unordered_map>
-#include "caseless.hpp"
+#include "details/caseless.hpp"
 #include "debug.h"
 
 using namespace std;
+using namespace InferenceEngine::details;
 
 class CaselessTests : public ::testing::Test {
  protected:

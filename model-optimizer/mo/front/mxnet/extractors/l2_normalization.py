@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ def l2_normalization_ext(attrs):
     eps = attrs.float('eps', 1e-10)
 
     node_attrs = {
+        'op': 'Normalize',
         'type': 'Normalize',
         'eps': eps,
         'across_spatial': 0,

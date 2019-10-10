@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -35,10 +34,11 @@ public:
     CNNNetwork() = default;
 
     /**
+     * @deprecated Use CNNNetwork::CNNNetwork(std::shared_ptr<ICNNNetwork>) to construct a network
      * @brief Initialises helper class from externally managed pointer
-     * @deprecated use shared_pointers based version of CNNNetworks constructor
      * @param actual Pointer to the network object
      */
+    INFERENCE_ENGINE_DEPRECATED
     explicit CNNNetwork(ICNNNetwork* actual) : actual(actual) {
         if (actual == nullptr) {
             THROW_IE_EXCEPTION << "CNNNetwork was not initialized.";
@@ -70,6 +70,11 @@ public:
     }
 
     /**
+     * @brief A destructor
+     */
+    virtual ~CNNNetwork() {}
+
+    /**
      * @brief Wraps original method
      * ICNNNetwork::getPrecision
      */
@@ -84,7 +89,7 @@ public:
     virtual OutputsDataMap getOutputsInfo() const {
         OutputsDataMap outputs;
         actual->getOutputsInfo(outputs);
-        return std::move(outputs);
+        return outputs;
     }
 
     /**
@@ -94,7 +99,7 @@ public:
     virtual InputsDataMap getInputsInfo() const {
         InputsDataMap inputs;
         actual->getInputsInfo(inputs);
-        return std::move(inputs);
+        return inputs;
     }
 
     /**
@@ -103,6 +108,14 @@ public:
      */
     size_t layerCount() const {
         return actual->layerCount();
+    }
+
+    /**
+     * @brief Wraps original method
+     * ICNNNetwork::getName
+     */
+    const std::string& getName() const noexcept {
+        return actual->getName();
     }
 
     /**
@@ -130,11 +143,17 @@ public:
     }
 
     /**
+     * @deprecated No needs to specify target device to the network. Use InferenceEngine::Core with target device directly
      * @brief Sets tha target device
      * @param device Device instance to set
      */
+    #ifndef _WIN32
+    INFERENCE_ENGINE_DEPRECATED
+    #endif
     void setTargetDevice(TargetDevice device) {
+        IE_SUPPRESS_DEPRECATED_START
         actual->setTargetDevice(device);
+        IE_SUPPRESS_DEPRECATED_END
     }
 
     /**
@@ -191,7 +210,7 @@ public:
      * @brief - Helper method to get collect all input shapes with names of corresponding Data objects
      * @return Map of pairs: input's name and its dimension.
      */
-    virtual ICNNNetwork::InputShapes getInputShapes() {
+    virtual ICNNNetwork::InputShapes getInputShapes() const {
         ICNNNetwork::InputShapes shapes;
         InputsDataMap inputs;
         actual->getInputsInfo(inputs);
@@ -200,15 +219,29 @@ public:
             if (info) {
                 auto data = info->getInputData();
                 if (data) {
-                    shapes[data->name] = data->getTensorDesc().getDims();
+                    shapes[data->getName()] = data->getTensorDesc().getDims();
                 }
             }
         }
-        return std::move(shapes);
+        return shapes;
     }
 
+    /**
+     * @brief Run shape inference with new input shapes for the network
+     * @param inputShapes - map of pairs: name of corresponding data and its dimension.
+     */
     virtual void reshape(const ICNNNetwork::InputShapes &inputShapes) {
         CALL_STATUS_FNC(reshape, inputShapes);
+    }
+
+    /**
+     * @brief Serialize network to IR and weights files.
+     * @param xmlPath Path to output IR file.
+     * @param binPath Path to output weights file. The parameter is skipped in case
+     * of executable graph info serialization.
+     */
+    void serialize(const std::string &xmlPath, const std::string &binPath = "") const {
+        CALL_STATUS_FNC(serialize, xmlPath, binPath);
     }
 
 protected:

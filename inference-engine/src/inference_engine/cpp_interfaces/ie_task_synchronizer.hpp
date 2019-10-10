@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -22,6 +21,7 @@ public:
     typedef std::shared_ptr<TaskSynchronizer> Ptr;
 
     TaskSynchronizer() : _taskCount(0) {}
+    virtual ~TaskSynchronizer() = default;
 
     virtual void lock() {
         auto taskID = _addTaskToQueue();

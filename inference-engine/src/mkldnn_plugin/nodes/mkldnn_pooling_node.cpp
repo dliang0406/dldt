@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -11,49 +10,48 @@
 #include <vector>
 #include <mkldnn_types.h>
 #include <mkldnn_extension_utils.h>
+#include <ie_layers_internal.hpp>
 
 using namespace mkldnn;
 using namespace MKLDNNPlugin;
 using namespace InferenceEngine;
 
-MKLDNNPoolingNode::MKLDNNPoolingNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng) : MKLDNNNode(layer, eng) {}
+MKLDNNPoolingNode::MKLDNNPoolingNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket)
+        : MKLDNNNode(layer, eng, socket) {}
 
 void MKLDNNPoolingNode::getSupportedDescriptors() {
     if (!descs.empty())
         return;
 
     InferenceEngine::Precision precision = getCnnLayer()->insData[0].lock()->getPrecision();
-    if (precision != InferenceEngine::Precision::FP32)
-        precision = InferenceEngine::Precision::FP32;
     auto inputDataType = MKLDNNExtensionUtils::IEPrecisionToDataType(precision);
     precision = getCnnLayer()->outData[0]->getPrecision();
-    if (precision != InferenceEngine::Precision::FP32)
-        precision = InferenceEngine::Precision::FP32;
     auto outputDataType = MKLDNNExtensionUtils::IEPrecisionToDataType(precision);
 
-    auto * cnnLayer = dynamic_cast<PoolingLayer*>(getCnnLayer().get());
-    if (cnnLayer == nullptr)
+    auto * poolingLayer = dynamic_cast<PoolingLayer*>(getCnnLayer().get());
+    if (poolingLayer == nullptr)
         THROW_IE_EXCEPTION << "Cannot convert pooling layer.";
 
     if (getParentEdges().size() != 1)
-        THROW_IE_EXCEPTION << "Incorrect number of input edges.";
+        THROW_IE_EXCEPTION << "Incorrect number of input edges for layer " << getName();
     if (getChildEdges().empty())
-        THROW_IE_EXCEPTION << "Incorrect number of output edges.";
+        THROW_IE_EXCEPTION << "Incorrect number of output edges for layer " << getName();
 
-    type = cnnLayer->_type;
-    exclude_pad = cnnLayer->_exclude_pad;
+    type = poolingLayer->_type;
+    exclude_pad = poolingLayer->_exclude_pad;
 
-    stride = {static_cast<int>(cnnLayer->_stride_y), static_cast<int>(cnnLayer->_stride_x)};
-    paddingL = {static_cast<int>(cnnLayer->_padding_y), static_cast<int>(cnnLayer->_padding_x)};
-    paddingR = {0, 0};
-    kernel = {static_cast<int>(cnnLayer->_kernel_y), static_cast<int>(cnnLayer->_kernel_x)};
+    invertVectorCopyUtoI(poolingLayer->_stride, stride);
+    invertVectorCopyUtoI(poolingLayer->_kernel, kernel);
+    auto allPads = getPaddings(*poolingLayer);
+    invertVectorCopyUtoI(allPads.begin, paddingL);
+    invertVectorCopyUtoI(allPads.end, paddingR);
 
     auto parentDims = getParentEdgeAt(0)->getDims();
     auto childDims = getChildEdgeAt(0)->getDims();
-    if (parentDims.ndims() != 4)
-        THROW_IE_EXCEPTION << "Pooling layer. Unsupported mode, only 4D blob as input.";
+    if ((parentDims.ndims() < 4) || (parentDims.ndims() > 5))
+        THROW_IE_EXCEPTION << "Pooling layer. Unsupported mode. Only 4D and 5D blobs are supported as input.";
 
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < paddingR.size(); i++) {
         int krn = kernel[i];
         int src = getParentEdgeAt(0)->getDims()[2 + i];
         int dst = getChildEdgeAt(0)->getDims()[2 + i];
@@ -61,13 +59,27 @@ void MKLDNNPoolingNode::getSupportedDescriptors() {
         int calc_dst = (src - krn + paddingL[i]) / stride[i] + 1;
         paddingR[i] = (dst - calc_dst) * stride[i];
     }
-
-    // It doesn't support any format
-    for (auto format : getAvailableFormatsForDims(parentDims)) {
-        MKLDNNMemoryDesc in_candidate{parentDims, inputDataType, format};
-        MKLDNNMemoryDesc out_candidate{childDims, outputDataType, format};
-
-        createDescriptor({in_candidate}, {out_candidate});
+    if (this->getCnnLayer()->precision == Precision::I8) {
+        // i8 layers supports only nhwc layout
+        MKLDNNMemoryDesc in_candidate{parentDims, inputDataType, memory::format::nhwc};
+        MKLDNNMemoryDesc out_candidate{childDims, outputDataType, memory::format::nhwc};
+        createDescriptor({ in_candidate }, { out_candidate });
+    } else if ((parentDims.ndims() == 4 || parentDims.ndims() == 5) && parentDims[1] == 1) {
+        inputDataType = memory::f32;
+        outputDataType = memory::f32;
+        // WA. We should force planar layout since it provides better performance
+        MKLDNNMemoryDesc in_candidate{parentDims, inputDataType, parentDims.ndims() == 5 ? memory::format::ncdhw : memory::format::nchw};
+        MKLDNNMemoryDesc out_candidate{childDims, outputDataType, parentDims.ndims() == 5 ? memory::format::ncdhw : memory::format::nchw};
+        createDescriptor({ in_candidate }, { out_candidate });
+    } else {
+        inputDataType = memory::f32;
+        outputDataType = memory::f32;
+        // It doesn't support any format
+        for (auto format : getAvailableFormatsForDims(parentDims)) {
+            MKLDNNMemoryDesc in_candidate{parentDims, inputDataType, format};
+            MKLDNNMemoryDesc out_candidate{childDims, outputDataType, format};
+            createDescriptor({in_candidate}, {out_candidate});
+        }
     }
 }
 
@@ -92,7 +104,14 @@ void MKLDNNPoolingNode::createDescriptor(const std::vector<InferenceEngine::Tens
 
     algorithm alg;
     if (type == PoolingLayer::PoolType::AVG) {
-        if (!exclude_pad && (paddingL[0] != 0 || paddingL[1] != 0))
+        bool not_zero_l = false;
+        for (auto lr : paddingL) {
+            if (lr) {
+                not_zero_l = true;
+                break;
+            }
+        }
+        if (!exclude_pad && not_zero_l)
             alg = pooling_avg_include_padding;
         else
             alg = pooling_avg_exclude_padding;
@@ -109,7 +128,14 @@ void MKLDNNPoolingNode::createDescriptor(const std::vector<InferenceEngine::Tens
                                       stride, kernel, paddingL, paddingR,
                                       mkldnn::padding_kind::zero));
 
-    if (alg == pooling_avg_include_padding && (paddingR[0] || paddingR[1])) {
+    bool not_zero_r = false;
+    for (auto pr : paddingR) {
+        if (pr) {
+            not_zero_r = true;
+            break;
+        }
+    }
+    if (alg == pooling_avg_include_padding && not_zero_r) {
         // In case of AVG including paddings the norm coeff should be calculated
         // with tacking into account original pads. So we need to restore
         // original values (R_padding = L_padding).

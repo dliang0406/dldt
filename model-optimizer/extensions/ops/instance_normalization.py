@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 import networkx as nx
 
+from mo.graph.graph import Graph
 from mo.ops.op import Op
 
 
@@ -24,12 +25,12 @@ class InstanceNormalization(Op):
 
         y = scale * (x - mean) / sqrt(variance + epsilon) + B
 
-        where x is input(0), scale is input(1) and B is input(3)
+        where x is input(0), scale is input(1) and B is input(2)
     '''
     op = 'InstanceNormalization'
     enabled = True
 
-    def __init__(self, graph: nx.MultiDiGraph, attrs: dict):
+    def __init__(self, graph: Graph, attrs: dict):
         super().__init__(graph, {
             'op': __class__.op,
             'epsilon': None,

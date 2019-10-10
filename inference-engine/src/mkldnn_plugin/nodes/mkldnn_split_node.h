@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -13,7 +12,7 @@ namespace MKLDNNPlugin {
 
 class MKLDNNSplitNode : public MKLDNNNode {
 public:
-    MKLDNNSplitNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng);
+    MKLDNNSplitNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket);
     ~MKLDNNSplitNode() override = default;
 
     void getSupportedDescriptors() override;
@@ -25,6 +24,8 @@ public:
 
     bool isOptimized();
     void initOptimalPrimitiveDescriptor() override;
+
+    void setDynamicBatchLim(int lim) override;
 
 private:
     static Register<MKLDNNSplitNode> reg;

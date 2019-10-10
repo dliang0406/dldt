@@ -14,7 +14,8 @@
 // limitations under the License.
 */
 
-#include "include/include_all.cl"
+#include "include/common.cl"
+#include "include/data_types.cl"
 
 KERNEL(activation)(
 #if GRADIENT
@@ -39,9 +40,9 @@ KERNEL(activation)(
     type_t v = ((__global type_t*) (input + input_offset))[0];
 
 #if GRADIENT
-    v = ACTIVATION(g, v, NL_M, NL_N);
+    v = ACTIVATION(g, v, ACTIVATION_PARAMS);
 #else
-    v = ACTIVATION(v, NL_M, NL_N);
+    v = ACTIVATION(v, ACTIVATION_PARAMS);
 #endif
 
     *((__global type_t*)(output + output_offset)) = v;

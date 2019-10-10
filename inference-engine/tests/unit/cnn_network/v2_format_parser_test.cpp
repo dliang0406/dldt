@@ -1,12 +1,11 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include <cpp/ie_cnn_network.h>
 #include <gtest/gtest.h>
 #include "xml_father.hpp"
-#include "inference_engine/v2_format_parser.h"
+#include "inference_engine/ie_format_parser.h"
 #include <string>
 #include <pugixml.hpp>
 #include <fstream>
@@ -141,6 +140,24 @@ TEST_F(V2FormatParserTest, failIfMeanValueNotSpecifiedInPreProcessing) {
 TEST_F(V2FormatParserTest, failIfIdLessThanZero) {
     string content = MAKE_ALEXNET_FOR_MEAN_TESTS_V2()
             .node("channel").attr("id", "-1").node("mean").attr("value", "104.5").close();
+
+    ASSERT_NO_FATAL_FAILURE(assertParseFail(content));
+}
+
+TEST_F(V2FormatParserTest, failIfIdNotInteger) {
+    string content = MAKE_ALEXNET_FOR_MEAN_TESTS_V2()
+            .node("channel").attr("id", "0").node("mean").attr("value", "104.5").close()
+            .newnode("channel").attr("id", "1").node("mean").attr("value", "117.8").close()
+            .newnode("channel").attr("id", "2_2").node("mean").attr("value", "123").close();
+
+    ASSERT_NO_FATAL_FAILURE(assertParseFail(content));
+}
+
+TEST_F(V2FormatParserTest, failIfValueNotFloat) {
+    string content = MAKE_ALEXNET_FOR_MEAN_TESTS_V2()
+            .node("channel").attr("id", "0").node("mean").attr("value", "104,5").close()
+            .newnode("channel").attr("id", "1").node("mean").attr("value", "117.8").close()
+            .newnode("channel").attr("id", "2").node("mean").attr("value", "123").close();
 
     ASSERT_NO_FATAL_FAILURE(assertParseFail(content));
 }
@@ -495,7 +512,7 @@ TEST_F(V2FormatParserTest, canParseSumInElementwiseNode) {
         .close()
     END_NET();
 
-     ASSERT_NO_FATAL_FAILURE(assertParseSucceed(content));
+    ASSERT_NO_FATAL_FAILURE(assertParseSucceed(content));
     CNNLayerPtr ewise;
     ASSERT_EQ(OK, net->getLayerByName("e", ewise, nullptr));
     auto *eltwise = dynamic_cast<EltwiseLayer *>(ewise.get());
@@ -506,20 +523,9 @@ TEST_F(V2FormatParserTest, canParseSumInElementwiseNode) {
 TEST_F(V2FormatParserTest, parsesNumberOfLayersCorrectly) {
     string content = MAKE_ALEXNET_FOR_MEAN_TESTS_V2();
 
-     ASSERT_NO_FATAL_FAILURE(assertParseSucceed(content));
-    CNNNetwork network(net.get());
+    ASSERT_NO_FATAL_FAILURE(assertParseSucceed(content));
+    CNNNetwork network(net);
     ASSERT_EQ(network.layerCount(), LAYER_COUNT);
-}
-
-TEST_F(V2FormatParserTest, canThrowExceptionIfUnknownActivation) {
-
-    string content = BEGIN_NET()
-        .initlayerInOut("a", "Activation", 1, 1, 2)
-        .node("data").attr("type", "tanH1").close()
-        .close()
-            END_NET();
-
-    ASSERT_NO_FATAL_FAILURE(assertParseFail(content));
 }
 
 TEST_F(V2FormatParserTest, canThrowExceptionIfNoType) {

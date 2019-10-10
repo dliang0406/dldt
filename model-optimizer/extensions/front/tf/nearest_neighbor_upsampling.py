@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -15,12 +15,15 @@
 """
 
 import logging as log
-import networkx as nx
 
-from extensions.ops.resample import ResampleOp
-from extensions.front.tf.Pack import Pack
+import numpy as np
+
+from extensions.front.Pack import Pack
+from extensions.ops.interpolate import Interpolate
+from mo.front.common.partial_infer.utils import int64_array
 from mo.front.common.replacement import FrontReplacementSubgraph
-from mo.graph.graph import replace_node
+from mo.graph.graph import Graph
+from mo.ops.const import Const
 
 
 class NearestNeighborUpsampling(FrontReplacementSubgraph):
@@ -32,7 +35,7 @@ class NearestNeighborUpsampling(FrontReplacementSubgraph):
     def pattern(self):
         return dict(
             nodes=[('op', dict(kind='op')),
-                   ('shape', dict(kind='op', op='Shape')),
+                   ('shape', dict(kind='op', op='ShapeOf')),
                    ('strided_slice', dict(kind='op', op='StridedSlice')),
                    ('pack_1', dict(kind='op', op='Pack')),
                    ('reshape_1', dict(kind='op', op='Reshape')),
@@ -52,11 +55,10 @@ class NearestNeighborUpsampling(FrontReplacementSubgraph):
                 ('reshape_1', 'mul'),
                 ('mul_const', 'mul'),
                 ('mul', 'reshape_2'),
-            ],
-            node_attrs=['kind', 'op'],
-            edge_attrs=[])
+            ]
+        )
 
-    def replace_sub_graph(self, graph: nx.MultiDiGraph, match: dict):
+    def replace_sub_graph(self, graph: Graph, match: dict):
         log.debug('Matched NearestNeighborUpsampling pattern: {}'.format([node.id for node in match.values()]))
         try:
             input_height = match['pack_1'].in_node(1).value.item()
@@ -68,10 +70,17 @@ class NearestNeighborUpsampling(FrontReplacementSubgraph):
             log.warning('Failed to determine scaling parameters from the topology. Do not apply pattern.')
             return
 
-        resample_op = ResampleOp(graph, {'width': input_width * width_scale, 'height': input_height * height_scale,
-                                         'name': 'Resample_', 'antialias': 0,
-                                         'resample_type': 'caffe.ResampleParameter.NEAREST'})
+        axes = int64_array([2, 3]) if graph.graph['layout'] == 'NCHW' else int64_array([1, 2])
+
+        const = Const(graph,
+                      {'value': np.array([input_height * height_scale, input_width * width_scale])}).create_node()
+        resample_op = Interpolate(graph, {'name': 'Resample_', 'antialias': 0, 'mode': 'nearest', 'axes': axes})
         resample_node = resample_op.create_node([match['op']])
 
-        replace_node(match['reshape_2'], resample_node)
+        match['reshape_2'].replace_node(resample_node)
+
+        resample_node.add_input_port(1, skip_if_exist=True)
+        assert resample_node.in_port(1).disconnected()
+        const.out_port(0).connect(resample_node.in_port(1))
+
         graph.remove_nodes_from([node.id for node in match.values() if node.id != match['op'].id])

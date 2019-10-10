@@ -91,8 +91,7 @@ struct jit_avx512_common_conv_winograd_fwd_kernel_f32
     static status_t init_conf(jit_conv_winograd_conf_t &jcp,
             const convolution_desc_t &cd, const memory_desc_wrapper &src_d,
             const memory_desc_wrapper &weights_d,
-            const memory_desc_wrapper &dst_d, const primitive_attr_t &attr,
-            bool with_relu = false, float relu_negative_slope = 0.);
+            const memory_desc_wrapper &dst_d, const primitive_attr_t &attr);
 };
 
 struct jit_avx512_common_conv_winograd_bwd_data_kernel_f32
@@ -166,6 +165,7 @@ private:
     reg64_t reg_srcA = r9;
     reg64_t reg_nb_ic = r10;
     reg64_t reg_loop_cpt = r11;
+    reg64_t reg_transB_idx = r13;
 
     /* Registers used by new kernel */
     reg64_t reg_dimM_block_loop_cnt = r10;

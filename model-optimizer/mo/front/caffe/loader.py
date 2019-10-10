@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -14,23 +14,31 @@
  limitations under the License.
 """
 
+import importlib
 import logging as log
 import mmap
 import os
+import sys
 
-
-import networkx as nx
 import numpy as np
 from google.protobuf import text_format
 from google.protobuf.internal import api_implementation
 
-from mo.front.caffe.proto import caffe_pb2
-from mo.graph.graph import Node, unique_id
-from mo.utils.error import Error
+from mo.graph.graph import Graph
+from mo.utils.error import Error, FrameworkError
 from mo.utils.utils import refer_to_faq_msg
 
 
-def parse_mean(file_path: str, in_shape: np.ndarray, mean_file_offsets: [tuple, None]):
+def import_caffe_pb2(caffe_parser_path: str):
+    # import caffe_pb2
+    sys.path.insert(0, caffe_parser_path)
+    caffe_pb2 = importlib.import_module("caffe_pb2")
+    sys.path.pop(0)
+
+    return caffe_pb2
+
+
+def parse_mean(file_path: str, in_shape: np.ndarray, mean_file_offsets: [tuple, None], caffe_pb2):
     blob = caffe_pb2.BlobProto()
     with open(file_path, 'rb') as file:
         data = file.read()
@@ -41,12 +49,12 @@ def parse_mean(file_path: str, in_shape: np.ndarray, mean_file_offsets: [tuple, 
 
     try:
         blob.ParseFromString(data)
-        data = np.array(blob.data)
+        data = np.array(blob.data)  # pylint: disable=no-member
 
         if blob.HasField('channels') or blob.HasField('height') or blob.HasField('width'):
-            data = data.reshape(blob.channels, blob.height, blob.width)
+            data = data.reshape(blob.channels, blob.height, blob.width)  # pylint: disable=no-member
         else:
-            data = data.reshape(blob.shape.dim)
+            data = data.reshape(blob.shape.dim)  # pylint: disable=no-member
         # crop mean image according to input size
         if in_shape[2] > data.shape[1] or in_shape[3] > data.shape[2]:
             raise Error(
@@ -82,7 +90,7 @@ def parse_mean(file_path: str, in_shape: np.ndarray, mean_file_offsets: [tuple, 
             str(err)) from err
 
 
-def load_caffe_proto_model(proto_path: str, model_path: [str, None] = None):
+def load_caffe_proto_model(caffe_pb2, proto_path: str, model_path: [str, None] = None):
     # 1. python protobuf is used
     if api_implementation._implementation_type == 'python':
         message = 'Please expect that Model Optimizer conversion might be slow. ' \
@@ -103,18 +111,40 @@ def load_caffe_proto_model(proto_path: str, model_path: [str, None] = None):
                        'python -m easy_install protobuf-3.5.1-py($your_python_version)-win-amd64.egg \n' \
                        'set PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=cpp'
         print(message + '\n\n' + refer_to_faq_msg(80))
+
     # Read proto layers
-    proto = caffe_pb2.NetParameter()
-    with open(proto_path, "r") as file:
-        text_format.Merge(str(file.read()), proto)
+    try:
+        proto = caffe_pb2.NetParameter()
+        with open(proto_path, "r") as file:
+            text_format.Merge(str(file.read()), proto)
+    except Exception as e:
+        log.error('Exception message: {}\n\n'.format(e) +
+                  '    Possible reasons:\n' +
+                  '      1. {} does not exist\n'.format(proto_path) +
+                  '      2. {} does not have a valid structure, for example, it was downloaded as html\n'.format(proto_path) +
+                  '      3. {} contains custom layers or attributes that are not supported\n'.format(proto_path) +
+                  '         in Model Optimizer by default.\n\n' +
+                  '    After you made sure that {} has a valid structure and still see this issue, then\n'.format(proto_path) +
+                  '    you need to generate a python parser for caffe.proto that was used when the model\n' +
+                  '    was created.\n' +
+                  '    Run "python3 generate_caffe_pb2.py --input_proto ${PATH_TO_CAFFE}/src/caffe/proto/caffe.proto"' +
+                  refer_to_faq_msg(1) + '\n\n', extra={'framework_error': True})
+        raise FrameworkError('Model Optimizer is not able to parse {}'.format(proto_path)) from e
 
     # Read model layer if exists
     model = None
-    if model_path:
-        model = caffe_pb2.NetParameter()
-        with open(model_path, "rb") as infile:
-            map = mmap.mmap(infile.fileno(), 0, access=mmap.ACCESS_READ)
-            model.MergeFromString(map)
+    try:
+        if model_path:
+            model = caffe_pb2.NetParameter()
+            with open(model_path, "rb") as infile:
+                map = mmap.mmap(infile.fileno(), 0, access=mmap.ACCESS_READ)
+                model.MergeFromString(map)
+    except Exception as e:
+        log.error('Exception message: {}\n\n'.format(e) +
+                  '    Possible reasons:\n' +
+                  '      1. {} does not exist\n'.format(model_path) +
+                  '      2. {} does not have a valid structure\n'.format(model_path), extra={'framework_error': True})
+        raise FrameworkError('Model Optimizer is not able to parse {}'.format(model_path)) from e
 
     return proto, model
 
@@ -143,10 +173,10 @@ def caffe_pb_to_nx(proto, model):
 
     Returns
     ----------
-    nx.MultiDiGraph
+        Graph
         built NX Directed graph.
     """
-    graph = nx.MultiDiGraph()
+    graph = Graph()
     # Blobs in prototxt model can be reused by inplace layer.
     # This requires loading of pb layers in order and tracking the latest
     # layer that writes a particular blob.
@@ -238,27 +268,30 @@ def caffe_pb_to_nx(proto, model):
                 raise Error('Input layer has no input dims. ' +
                             refer_to_faq_msg(8))
             if hasattr(input_param, 'shape'):
-                # example of proto input
-                # layer
-                # {
-                #     name: "data"
-                #     type: "Input"
-                #     top: "data"
-                #     input_param {shape: {dim: 1 dim: 3 dim: 600 dim: 1000}}
-                # }
-                #
-                # layer
-                # {
-                #     name: "im_info"
-                #     type: "Input"
-                #     top: "im_info"
-                #     input_param {shape: {dim: 1 dim: 3}}
-                # }
+                """
+                example of proto input
+                layer
+                {
+                    name: "data"
+                    type: "Input"
+                    top: "data"
+                    input_param {shape: {dim: 1 dim: 3 dim: 600 dim: 1000}}
+                }
+
+                layer
+                {
+                    name: "im_info"
+                    type: "Input"
+                    top: "im_info"
+                    input_param {shape: {dim: 1 dim: 3}}
+                }
+                """
                 dims = map(int, list(filter(None, str(list(input_param.shape)[0]).split('dim:'))))
                 input_dims.append(np.array(list(dims), dtype=np.int64))
                 input_names.append(layer.name)
 
-        graph.add_node(layer.name, pb=layer, model_pb=model_layer, kind='op')
+        layer.name = graph.unique_id(layer.name)
+        graph.add_node(layer.name, pb=layer, model_pb=model_layer, kind='op', type='Parameter')
 
         # connect inputs based on blob_producers dictionary
         for dst_port, bottom in enumerate(layer.bottom):
@@ -281,27 +314,6 @@ def caffe_pb_to_nx(proto, model):
             if top in blob_producers:
                 log.debug("Detected reuse of blob {} by layer {}".format(top, layer.name))
             blob_producers[top] = (layer.name, src_port)
-
-    # Find all nodes that do not have consumers.
-    # Add identity ops as a consumers for each output port for such nodes.
-    for node in list(graph.nodes()):
-        node = Node(graph, node)
-        if len(node.out_nodes()) == 0:
-            if not node.has_valid('pb') or not hasattr(node.pb, 'top'):
-                continue
-            for port, top in enumerate(node.pb.top):
-                new_id = unique_id(graph, 'TerminalIdentity_')
-                graph.add_node(new_id, op='Identity', type='Identity', kind='op')
-                edge_attrs = {
-                    'out': port,
-                    'in': 0,
-                    'name': top,
-                    'fw_tensor_debug_info': [(node.id, top)], # debug anchor for a framework tensor name and port
-                    'in_attrs': ['in', 'name'],
-                    'out_attrs': ['out', 'name'],
-                    'data_attrs': ['fw_tensor_debug_info']
-                }
-                graph.add_edge(node.id, new_id, **edge_attrs)
 
     if len(input_names) <= 0:
         raise Error('The topology contains no "input" layers. ' +

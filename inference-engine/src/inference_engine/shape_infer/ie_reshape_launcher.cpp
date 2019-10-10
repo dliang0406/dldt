@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -10,8 +9,12 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <details/ie_exception.hpp>
+#include <shape_infer/const_infer/ie_const_infer_holder.hpp>
 #include "shape_infer/ie_reshape_launcher.hpp"
 #include "shape_infer/ie_reshape_io_controllers.hpp"
+#include "ie_reshape_launcher.hpp"
+#include "built-in/ie_tensor_iterator_shape_infer.hpp"
 
 using namespace InferenceEngine;
 using namespace ShapeInfer;
@@ -27,18 +30,27 @@ InputController* DefaultInitializer::createInputController(const CNNLayer* layer
     for (auto const& insData : layer->insData) {
         data.push_back(insData.lock());
     }
-    return new InputController(data, layer->name, false);
+    return new InputController(data, layer->name);
 }
 
 OutputController* DefaultInitializer::createOutputController(const CNNLayer* layer) {
-    return new OutputController(layer->outData, layer->name, false);
+    return new OutputController(layer->outData, layer->name);
 }
 
 ReshapeLauncher::ReshapeLauncher(const CNNLayer* layer, const IShapeInferImpl::Ptr& impl,
-                                 const DefaultInitializer::Ptr& initializer) : _layer(layer), _impl(impl) {
+                                 const DefaultInitializer::Ptr& initializer) : _layer(layer), _reshapeImpl(impl) {
     initializer->check(layer, impl);
-    _iController = initializer->createInputController(layer);
-    _oController = initializer->createOutputController(layer);
+    ConstInferHolder holder;
+    if (layer) _inferImpl = holder.getConstInferImpl(layer->type);
+    try {
+        _iController = initializer->createInputController(layer);
+        _oController = initializer->createOutputController(layer);
+    } catch (...) {
+        auto exception = std::current_exception();
+        delete _iController;
+        delete _oController;
+        std::rethrow_exception(exception);
+    }
 }
 
 ReshapeLauncher::~ReshapeLauncher() {
@@ -52,13 +64,31 @@ void ReshapeLauncher::setShapeByName(const SizeVector& shape, const std::string&
     _iController->setShapeByName(shape, dataName);
 }
 
+void ReshapeLauncher::setBlobByName(const Blob::CPtr& blob, const std::string& dataName) {
+    _iController->setBlobByName(blob, dataName);
+}
+
+SizeVector ReshapeLauncher::getShapeByName(const std::string& dataName) {
+    return _oController->getShapeByName(dataName);
+}
+
 void ReshapeLauncher::reshape(const std::set<ReshapeLauncher::Ptr>& launchers) {
     ResponseDesc resp;
     std::vector<SizeVector> outShapes;
-    auto sts = _impl->inferShapes(_iController->getShapes(true), _layer->params, _layer->blobs, outShapes, &resp);
+
+    // TODO: TensorIterator strongly required original layer instance because body is not presented
+    //       in params map. Original subnetwork body is required for internal shape infer
+    TensorIteratorShapeProp *TI_shaper = dynamic_cast<TensorIteratorShapeProp*>(_reshapeImpl.get());
+    if (TI_shaper) {
+        TI_shaper->setOriginalLayer(_layer);
+    }
+
+    auto sts = _reshapeImpl->inferShapes(_iController->getBlobs(true), _layer->params, _layer->blobs, outShapes, &resp);
     _oController->setShapes(outShapes);
     if (sts != OK)
-        THROW_IE_EXCEPTION << resp.msg;
+        THROW_IE_EXCEPTION <<
+                           "Failed to infer shapes for " + _layer->type + " layer (" + _layer->name + ") with error: " +
+                           resp.msg;
     _oController->propagateShapes(launchers);
 }
 
@@ -66,6 +96,23 @@ void ReshapeLauncher::applyChanges(CNNLayer* layer) {
     checkLayer(layer);
     _iController->applyChanges();
     _oController->applyChanges();
+
+    // TODO: Need to finalize result of internal body shape infer and apply
+    //       new shapes to body subnetwork
+    TensorIteratorShapeProp *TI_shaper = dynamic_cast<TensorIteratorShapeProp*>(_reshapeImpl.get());
+    if (TI_shaper) TI_shaper->apply();
+}
+
+void ReshapeLauncher::constInfer(const std::set<ReshapeLauncher::Ptr>& launchers) {
+    if (_iController->isDataAvailable() || _layer->type == "Const" || _layer->type == "Shape") {
+        auto outBlobs = _oController->createBlobs();
+        _oController->setBlobs(outBlobs);
+        if (!_inferImpl)
+            THROW_IE_EXCEPTION << "Failed to find reference implementation for `"
+                                  + _layer->name + "` Layer with `" + _layer->type + "` Type on constant propagation";
+        _inferImpl->infer(_iController->getBlobs(false), _layer->params, _layer->blobs, outBlobs);
+        _oController->propagateBlobs(launchers);
+    }
 }
 
 void ReshapeLauncher::reset() {
@@ -99,7 +146,7 @@ void ReshapeLauncher::setIRShapeByName(const std::string& dataName) {
 }
 
 void ReshapeLauncher::setShapeInferImpl(const IShapeInferImpl::Ptr& impl) {
-    _impl = impl;
+    _reshapeImpl = impl;
 }
 
 const CNNLayer* ReshapeLauncher::getLayer() const {
@@ -111,7 +158,7 @@ InputController* FakeInitializer::createInputController(const CNNLayer* layer) {
     for (auto const& insData : layer->insData) {
         outData.push_back(insData.lock());
     }
-    return new InputController(outData, layer->name, true);
+    return new InputController(outData, layer->name);
 }
 
 void FakeInitializer::check(const CNNLayer* layer, const IShapeInferImpl::Ptr& impl) {
@@ -120,7 +167,7 @@ void FakeInitializer::check(const CNNLayer* layer, const IShapeInferImpl::Ptr& i
 }
 
 OutputController* FakeInitializer::createOutputController(const CNNLayer* layer) {
-    return new OutputController(layer->outData, layer->name, true);
+    return new OutputController(layer->outData, layer->name);
 }
 
 FakeReshapeLauncher::FakeReshapeLauncher(const CNNLayer* layer, const IShapeInferImpl::Ptr& impl)
@@ -137,7 +184,7 @@ void FakeReshapeLauncher::reshape(const std::set<ReshapeLauncher::Ptr>& launcher
         auto irInShape = iShapesIR[i];
         bool equal = std::equal(newInShape.begin(), newInShape.end(), irInShape.begin());
         if (!equal) {
-            return THROW_IE_EXCEPTION
+            THROW_IE_EXCEPTION
                     << "Failed to infer shapes for layer with type: " << _layer->type
                     << ". Use @IShapeInferExtension class to register shape infer function for this layer";
         }
@@ -160,7 +207,7 @@ InputController* OutputOnlyInitializer::createInputController(const CNNLayer* la
 }
 
 OutputController* OutputOnlyInitializer::createOutputController(const CNNLayer* layer) {
-    return new OutputController(layer->outData, layer->name, true);
+    return new OutputController(layer->outData, layer->name);
 }
 
 OutputOnlyReshapeLauncher::OutputOnlyReshapeLauncher(const CNNLayer* layer, const IShapeInferImpl::Ptr& impl,
@@ -169,6 +216,10 @@ OutputOnlyReshapeLauncher::OutputOnlyReshapeLauncher(const CNNLayer* layer, cons
 
 void OutputOnlyReshapeLauncher::setShapeByName(const SizeVector& shape, const std::string& dataName) {
     _oController->setShapeByName(shape, dataName);
+}
+
+void OutputOnlyReshapeLauncher::setBlobByName(const Blob::CPtr& blob, const std::string& dataName) {
+    _oController->setBlobByName(blob, dataName);
 }
 
 void OutputOnlyReshapeLauncher::setIRShapeByName(const std::string& dataName) {
@@ -183,6 +234,23 @@ void OutputOnlyReshapeLauncher::applyChanges(CNNLayer* layer) {
 
 void OutputOnlyReshapeLauncher::reset() {
     _oController->reset();
+}
+
+void OutputOnlyReshapeLauncher::constInfer(const std::set<ReshapeLauncher::Ptr>& launchers) {
+    if (_layer->type == "Const") {
+        auto outBlobs = _oController->createBlobs();
+        _oController->setBlobs(outBlobs);
+        if (!_inferImpl)
+            THROW_IE_EXCEPTION << "Failed to find reference implementation for `"
+                                  + _layer->name + "` Layer with `" + _layer->type + "` Type on constant propagation";
+        _inferImpl->infer({}, _layer->params, _layer->blobs, outBlobs);
+        auto shapes = _oController->getShapes(true);
+        for (int i = 0; i < outBlobs.size(); i++) {
+            outBlobs[i]->getTensorDesc().reshape(shapes[i], TensorDesc::getLayoutByDims(shapes[i]));
+        }
+        _oController->setBlobs(outBlobs);
+        _oController->propagateBlobs(launchers);
+    }
 }
 
 void InputInitializer::check(const CNNLayer* layer, const IShapeInferImpl::Ptr& impl) {
@@ -254,9 +322,6 @@ OutputController* OutMemoryInitializer::createOutputController(const CNNLayer* l
 
 OutMemoryReshapeLauncher::OutMemoryReshapeLauncher(const CNNLayer* layer, const IShapeInferImpl::Ptr& impl)
         : ReshapeLauncher(layer, impl, std::make_shared<OutMemoryInitializer>()) {
-}
-
-void OutMemoryReshapeLauncher::reshape(const std::set<ReshapeLauncher::Ptr>& launchers) {
 }
 
 void OutMemoryReshapeLauncher::applyChanges(CNNLayer* layer) {

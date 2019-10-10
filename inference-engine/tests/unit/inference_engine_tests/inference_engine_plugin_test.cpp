@@ -1,12 +1,10 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include "tests_common.hpp"
 
 #include <ie_plugin_ptr.hpp>
-#include <mkldnn/mkldnn_extension.hpp>
 #include "details/ie_so_loader.h"
 #include "inference_engine.hpp"
 #include "mock_inference_engine.hpp"
@@ -99,9 +97,11 @@ TEST_F(PluginTest, canForwardPluginEnginePtr) {
     EXPECT_CALL(engine, Infer(_, A<Blob&>(), _)).WillOnce(Return(OK));
     EXPECT_CALL(engine, Release()).Times(1);
 
-    TBlob <float> b1(Precision::FP32, NCHW);
-    TBlob <float> b2(Precision::FP32, NCHW);
+    TBlob <float> b1(TensorDesc(Precision::FP32, NCHW));
+    TBlob <float> b2(TensorDesc(Precision::FP32, NCHW));
+    IE_SUPPRESS_DEPRECATED_START
     ptr3->Infer(b1, b2, nullptr);
+    IE_SUPPRESS_DEPRECATED_END
 }
 
 

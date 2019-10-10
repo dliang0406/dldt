@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -15,7 +14,7 @@ namespace MKLDNNPlugin {
 
 class MKLDNNDeconvolutionNode : public MKLDNNNode {
 public:
-    MKLDNNDeconvolutionNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng);
+    MKLDNNDeconvolutionNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket);
     ~MKLDNNDeconvolutionNode() override = default;
 
     void getSupportedDescriptors() override;
@@ -32,13 +31,14 @@ public:
     MKLDNNMemoryDesc getDstMemDesc(mkldnn::primitive_desc_iterator &primitive_desc_it, size_t idx) override;
 
 private:
-    bool withBiases;
-    bool withGroups;
-    bool isDW;
-    std::vector<int> stride;
-    std::vector<int> paddingL;
-    std::vector<int> dilation;
-    std::vector<int> paddingR;
+    bool withBiases = false;
+    bool withGroups = false;
+    bool isDW = false;
+    size_t groupNum = 1;
+    std::vector<ptrdiff_t> stride;
+    std::vector<ptrdiff_t> paddingL;
+    std::vector<ptrdiff_t> dilation;
+    std::vector<ptrdiff_t> paddingR;
     MKLDNNDims weightsDims;
     static Register<MKLDNNDeconvolutionNode> reg;
     InferenceEngine::Blob::Ptr biases;

@@ -1,12 +1,10 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include <gtest/gtest.h>
 #include <gmock/gmock-spec-builders.h>
 #include "mkldnn_plugin/mkldnn_graph.h"
-#include "mock_mkldnn_primitive.hpp"
 
 #include "test_graph.hpp"
 
@@ -46,8 +44,10 @@ void ref_tile(const InferenceEngine::TBlob<data_t> &src, InferenceEngine::TBlob<
     int m_outer_dim = 1;
     int m_inner_dim = 1;
 
-    for (int i=0; i < prm.axis; i++ ) m_outer_dim *= src.dims()[i];
-    for (int i=prm.axis; i < src.dims().size(); i++ ) m_inner_dim *= src.dims()[i];
+    for (int i=0; i < prm.axis; i++ )
+        m_outer_dim *= src.getTensorDesc().getDims()[i];
+    for (int i=prm.axis; i < src.getTensorDesc().getDims().size(); i++ )
+        m_inner_dim *= src.getTensorDesc().getDims()[i];
 
     float* dst = dst_blob.data();
 
@@ -149,7 +149,7 @@ protected:
 
             InferenceEngine::SizeVector dims_src = {p.in.n, p.in.c, p.in.h, p.in.w};
 
-            InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src);
+            InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src, InferenceEngine::NCHW});
             src->allocate();
             fill_data(src->buffer(), src->size());
 
@@ -229,7 +229,7 @@ protected:
 
             InferenceEngine::SizeVector dims_src = {MB, p.in.c, p.in.h, p.in.w};
 
-            InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src);
+            InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src, InferenceEngine::NCHW});
             src->allocate();
             fill_data(src->buffer(), src->size());
 

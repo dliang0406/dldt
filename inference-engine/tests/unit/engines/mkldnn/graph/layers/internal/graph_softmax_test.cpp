@@ -1,12 +1,10 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include <gtest/gtest.h>
 #include <gmock/gmock-spec-builders.h>
 #include "mkldnn_plugin/mkldnn_graph.h"
-#include "mock_mkldnn_primitive.hpp"
 
 #include "test_graph.hpp"
 
@@ -22,12 +20,8 @@ using namespace mkldnn;
 
 
 struct softmax_test_params {
-    struct {
-        size_t n;
-        size_t c;
-        size_t h;
-        size_t w;
-    } in;
+    // Formats: NCHW, NCDHW
+    vector<size_t> dims;
 
     int axis;
 
@@ -44,14 +38,21 @@ void check_softmax_fwd(const InferenceEngine::TBlob<data_t> &src, softmax_test_p
 {
     const data_t *src_data = src.readOnly();
 
-    size_t W = prm.in.w;
-    size_t H = prm.in.h;
-    size_t C = prm.in.c;
-    size_t MB = 1;
+    auto dims_size = prm.dims.size();
 
-    auto off = [=](int n, int c, int h, int w)
+    int axis = prm.axis;
+    if (dims_size == 4 && axis > 1)
+        axis++;
+
+    size_t W = prm.dims[dims_size - 1];
+    size_t H = prm.dims[dims_size - 2];
+    size_t D = dims_size == 5 ? prm.dims[dims_size - 3] : 1u;
+    size_t C = prm.dims[1];
+    size_t MB = prm.dims[0];
+
+    auto off = [=](int n, int c, int d, int h, int w)
     {
-        return (n * W * H * C + c * W * H + h * W + w);
+        return (n * W * H * D * C + c * W * H * D + d * W * H + h * W + w);
     };
 
     auto check_norm = [=](double res) {
@@ -60,63 +61,86 @@ void check_softmax_fwd(const InferenceEngine::TBlob<data_t> &src, softmax_test_p
         }
     };
 
-    if(prm.axis == 0) {
-
+    if(axis == 0) {
         for (int c = 0; c < C; ++c) {
+            for (int d = 0; d < D; ++d) {
+                for (int h = 0; h < H; ++h) {
+                    for (int w = 0; w < W; ++w) {
+                        double result = 0.0f;
 
-            for (int h = 0; h < H; ++h) {
-                for (int w = 0; w < W; ++w) {
-                    double result = 0.0f;
-
-                    for (int n = 0; n < MB; ++n) {
-                        result += src_data[off(n, c, h, w)];//dst_ptr[map_index(dst_pd, off(n, c, h, w))];
+                        for (int n = 0; n < MB; ++n) {
+                            result += src_data[off(n, c, d, h, w)];
+                        }
+                        check_norm(result);
                     }
-                    check_norm(result);
                 }
             }
         }
     }
-    else if(prm.axis == 1) {
+    else if(axis == 1) {
         for (int n = 0; n < MB; ++n) {
-            for (int h = 0; h < H; ++h) {
-                for (int w = 0; w < W; ++w) {
-                    double result = 0.0f;
+            for (int d = 0; d < D; ++d) {
+                for (int h = 0; h < H; ++h) {
+                    for (int w = 0; w < W; ++w) {
+                        double result = 0.0f;
 
-                    for (int c = 0; c < C; ++c) {
-                        result += src_data[off(n, c, h, w)];//dst_ptr[map_index(dst_pd, off(n, c, h, w))];
+                        for (int c = 0; c < C; ++c) {
+                            result += src_data[off(n, c, d, h, w)];//dst_ptr[map_index(dst_pd, off(n, c, h, w))];
+                        }
+
+                        check_norm(result);
                     }
-
-                    check_norm(result);
                 }
             }
         }
     }
-    else if(prm.axis == 2) {
-        for (int n = 0; n < MB; ++n) {
-            for (int c = 0; c < C; ++c) {
-                for (int w = 0; w < W; ++w) {
-                    double result = 0.0f;
-
-                    for (int h = 0; h < H; ++h) {
-                        result += src_data[off(n, c, w, w)];//dst_ptr[map_index(dst_pd, off(n, c, h, w))];
-                    }
-
-                    check_norm(result);
-                }
-            }
-        }
-    }
-    else if(prm.axis == 3) {
+    else if(axis == 2) {
         for (int n = 0; n < MB; ++n) {
             for (int c = 0; c < C; ++c) {
                 for (int h = 0; h < H; ++h) {
-                    double result = 0.0f;
-
                     for (int w = 0; w < W; ++w) {
-                        result += src_data[off(n, c, h, w)];//dst_ptr[map_index(dst_pd, off(n, c, h, w))];
-                    }
+                        double result = 0.0f;
 
-                    check_norm(result);
+                        for (int d = 0; d < D; ++d) {
+                            result += src_data[off(n, c, d, h, w)];//dst_ptr[map_index(dst_pd, off(n, c, h, w))];
+                        }
+
+                        check_norm(result);
+                    }
+                }
+            }
+        }
+    }
+    else if(axis == 3) {
+        for (int n = 0; n < MB; ++n) {
+            for (int c = 0; c < C; ++c) {
+                for (int d = 0; d < D; ++d) {
+                    for (int w = 0; w < W; ++w) {
+                        double result = 0.0f;
+
+                        for (int h = 0; h < H; ++h) {
+                            result += src_data[off(n, c, d, h, w)];//dst_ptr[map_index(dst_pd, off(n, c, h, w))];
+                        }
+
+                        check_norm(result);
+                    }
+                }
+            }
+        }
+    }
+    else if(axis == 4) {
+        for (int n = 0; n < MB; ++n) {
+            for (int c = 0; c < C; ++c) {
+                for (int d = 0; d < D; ++d) {
+                    for (int h = 0; h < H; ++h) {
+                        double result = 0.0f;
+
+                        for (int w = 0; w < W; ++w) {
+                            result += src_data[off(n, c, d, h, w)];//dst_ptr[map_index(dst_pd, off(n, c, h, w))];
+                        }
+
+                        check_norm(result);
+                    }
                 }
             }
         }
@@ -133,17 +157,19 @@ class MKLDNNGraphSoftMaxTests: public TestsCommon,
                 <port id="0">
                     <dim>_IN_</dim>
                     <dim>_IC_</dim>
+                    <dim>_ID_</dim>
                     <dim>_IH_</dim>
                     <dim>_IW_</dim>
                 </port>
             </output>
         </layer>
         <layer name="norm" id="1" type="Softmax" precision="FP32">
-            <data PrimitivesPriority="_IMPLS_"/>
+            <data PrimitivesPriority="_IMPLS_" axis="_AX_"/>
             <input>
                 <port id="1">
                     <dim>_IN_</dim>
                     <dim>_IC_</dim>
+                    <dim>_ID_</dim>
                     <dim>_IH_</dim>
                     <dim>_IW_</dim>
                 </port>
@@ -152,6 +178,7 @@ class MKLDNNGraphSoftMaxTests: public TestsCommon,
                 <port id="2">
                     <dim>_IN_</dim>
                     <dim>_IC_</dim>
+                    <dim>_ID_</dim>
                     <dim>_IH_</dim>
                     <dim>_IW_</dim>
                 </port>
@@ -168,10 +195,25 @@ protected:
     std::string getModel(softmax_test_params p) {
         std::string model = model_t;
 
-        REPLACE_WITH_NUM(model, "_IW_", p.in.w);
-        REPLACE_WITH_NUM(model, "_IH_", p.in.h);
-        REPLACE_WITH_NUM(model, "_IC_", p.in.c);
-        REPLACE_WITH_NUM(model, "_IN_", p.in.n);
+        auto dims_size = p.dims.size();
+        switch (dims_size) {
+            case 3:
+                REMOVE_LINE(model, "<dim>_IH_</dim>");
+            case 4:
+                REMOVE_LINE(model, "<dim>_ID_</dim>");
+        }
+
+        REPLACE_WITH_NUM(model, "_IW_", p.dims[dims_size - 1]);
+        REPLACE_WITH_NUM(model, "_IC_", p.dims[1]);
+        REPLACE_WITH_NUM(model, "_IN_", p.dims[0]);
+        switch (dims_size) {
+            case 5:
+                REPLACE_WITH_NUM(model, "_ID_", p.dims[dims_size - 3]);
+            case 4:
+                REPLACE_WITH_NUM(model, "_IH_", p.dims[dims_size - 2]);
+        }
+
+        REPLACE_WITH_NUM(model, "_AX_", p.axis);
         std::string impls;
         for (const auto& preferType : p.preferTypes) {
             if (!impls.empty())
@@ -191,7 +233,6 @@ protected:
             TestsCommon::SetUp();
             softmax_test_params p = ::testing::WithParamInterface<softmax_test_params>::GetParam();
             std::string model = getModel(p);
-
             InferenceEngine::CNNNetReader net_reader;
             ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
@@ -209,9 +250,18 @@ protected:
                 }
             }
 
-            InferenceEngine::SizeVector dims_src = {p.in.n, p.in.c, p.in.h, p.in.w};
+            InferenceEngine::SizeVector dims_src = p.dims;
+            InferenceEngine::Layout layout = InferenceEngine::ANY;
+            switch (p.dims.size()) {
+                case 4:
+                    layout = InferenceEngine::NCHW;
+                    break;
+                case 5:
+                    layout = InferenceEngine::NCDHW;
+                    break;
+            }
 
-            InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src);
+            InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src, layout});
             src->allocate();
             fill_data(src->buffer(), src->size());
 
@@ -249,8 +299,27 @@ TEST_P(MKLDNNGraphSoftMaxTests, TestsSoftMax) {}
 INSTANTIATE_TEST_CASE_P(
         TestsSoftMax, MKLDNNGraphSoftMaxTests,
         ::testing::Values(
-                softmax_test_params{{1, 3, 228, 228}, 1, 3, MKLDNNPlugin::impl_desc_type::jit},
-                softmax_test_params{{1, 3, 228, 228}, 1, 3, MKLDNNPlugin::impl_desc_type::ref, {MKLDNNPlugin::impl_desc_type::ref_any}}));
+                softmax_test_params{{1, 3, 228, 228}, 1, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{1, 3, 228, 228}, 1, 2, MKLDNNPlugin::impl_desc_type::ref, {MKLDNNPlugin::impl_desc_type::ref_any}},
+                softmax_test_params{{1, 100, 6, 1}, 1, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{1, 100, 6, 1}, 1, 2, MKLDNNPlugin::impl_desc_type::ref, {MKLDNNPlugin::impl_desc_type::ref_any}},
+                softmax_test_params{{1, 1000, 1, 1}, 1, 1, MKLDNNPlugin::impl_desc_type::ref},
+                softmax_test_params{{8, 1000, 1, 1}, 1, 1, MKLDNNPlugin::impl_desc_type::ref},
+                softmax_test_params{{1, 19, 128, 128}, 1, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{1, 19, 128, 128}, 1, 2, MKLDNNPlugin::impl_desc_type::ref, {MKLDNNPlugin::impl_desc_type::ref_any}},
+//                softmax_test_params{{8, 100, 81, 1}, 2, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{8, 100, 81, 1}, 2, 1, MKLDNNPlugin::impl_desc_type::ref, {MKLDNNPlugin::impl_desc_type::ref_any}},
+                softmax_test_params{{1, 1, 1, 1}, 3, 1, MKLDNNPlugin::impl_desc_type::ref},
+//                softmax_test_params{{1, 1, 1, 33}, 3, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{1, 1, 1, 33}, 3, 1, MKLDNNPlugin::impl_desc_type::ref, {MKLDNNPlugin::impl_desc_type::ref_any}},
+//                softmax_test_params{{8, 1, 10, 81}, 3, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{8, 1, 10, 81}, 3, 1, MKLDNNPlugin::impl_desc_type::ref, {MKLDNNPlugin::impl_desc_type::ref_any}},
+                softmax_test_params{{2, 5, 9, 10, 11}, 0, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{2, 5, 9, 10, 11}, 1, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{2, 5, 9, 10, 11}, 2, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{2, 5, 9, 10, 11}, 3, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{2, 5, 9, 10, 11}, 4, 1, MKLDNNPlugin::impl_desc_type::ref, {MKLDNNPlugin::impl_desc_type::ref_any}}
+                ));
 
 class MKLDNNGraphDynBatchSoftMaxTests: public MKLDNNGraphSoftMaxTests {
 protected:
@@ -259,7 +328,8 @@ protected:
             TestsCommon::SetUp();
             softmax_test_params p = ::testing::WithParamInterface<softmax_test_params>::GetParam();
             std::string model = getModel(p);
-            size_t MB = p.in.n;
+            InferenceEngine::SizeVector dims_src = p.dims;
+            size_t MB = dims_src[0];
             if (MB < 2)
                 MB = 2;
 
@@ -276,9 +346,17 @@ protected:
             graph.setProperty({{InferenceEngine::PluginConfigParams::KEY_DYN_BATCH_ENABLED, InferenceEngine::PluginConfigParams::YES}});
             graph.CreateGraph(net_reader.getNetwork());
 
-            InferenceEngine::SizeVector dims_src = {MB, p.in.c, p.in.h, p.in.w};
+            InferenceEngine::Layout layout = InferenceEngine::ANY;
+            switch (p.dims.size()) {
+                case 4:
+                    layout = InferenceEngine::NCHW;
+                    break;
+                case 5:
+                    layout = InferenceEngine::NCDHW;
+                    break;
+            }
 
-            InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src);
+            InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src, layout});
             src->allocate();
             fill_data(src->buffer(), src->size());
 
@@ -319,5 +397,23 @@ TEST_P(MKLDNNGraphDynBatchSoftMaxTests, TestsDynBatchSoftMax) {}
 INSTANTIATE_TEST_CASE_P(
         TestsDynBatchSoftMax, MKLDNNGraphDynBatchSoftMaxTests,
         ::testing::Values(
-                softmax_test_params{{1, 3, 228, 228}, 1, 3, MKLDNNPlugin::impl_desc_type::jit},
-                softmax_test_params{{1, 3, 228, 228}, 1, 3, MKLDNNPlugin::impl_desc_type::ref, {MKLDNNPlugin::impl_desc_type::ref_any}}));
+                softmax_test_params{{1, 3, 228, 228}, 1, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{1, 3, 228, 228}, 1, 2, MKLDNNPlugin::impl_desc_type::ref, {MKLDNNPlugin::impl_desc_type::ref_any}},
+                softmax_test_params{{1, 100, 6, 1}, 1, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{1, 100, 6, 1}, 1, 2, MKLDNNPlugin::impl_desc_type::ref, {MKLDNNPlugin::impl_desc_type::ref_any}},
+                softmax_test_params{{1, 1000, 1, 1}, 1, 1, MKLDNNPlugin::impl_desc_type::ref},
+                softmax_test_params{{8, 1000, 1, 1}, 1, 1, MKLDNNPlugin::impl_desc_type::ref},
+                softmax_test_params{{1, 19, 128, 128}, 1, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{1, 19, 128, 128}, 1, 2, MKLDNNPlugin::impl_desc_type::ref, {MKLDNNPlugin::impl_desc_type::ref_any}},
+//                softmax_test_params{{8, 100, 81, 1}, 2, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{8, 100, 81, 1}, 2, 1, MKLDNNPlugin::impl_desc_type::ref, {MKLDNNPlugin::impl_desc_type::ref_any}},
+                softmax_test_params{{1, 1, 1, 1}, 3, 1, MKLDNNPlugin::impl_desc_type::ref},
+//                softmax_test_params{{1, 1, 1, 33}, 3, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{1, 1, 1, 33}, 3, 1, MKLDNNPlugin::impl_desc_type::ref, {MKLDNNPlugin::impl_desc_type::ref_any}},
+//                softmax_test_params{{8, 1, 10, 81}, 3, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{8, 1, 10, 81}, 3, 1, MKLDNNPlugin::impl_desc_type::ref, {MKLDNNPlugin::impl_desc_type::ref_any}},
+                softmax_test_params{{2, 5, 9, 10, 11}, 1, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{2, 5, 9, 10, 11}, 2, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{2, 5, 9, 10, 11}, 3, 2, MKLDNNPlugin::impl_desc_type::jit},
+                softmax_test_params{{2, 5, 9, 10, 11}, 4, 1, MKLDNNPlugin::impl_desc_type::ref, {MKLDNNPlugin::impl_desc_type::ref_any}}
+                ));

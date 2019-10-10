@@ -48,8 +48,6 @@ struct jit_uni_softmax_fwd_t : public cpu_primitive_t {
         virtual status_t init() override {
             using namespace prop_kind;
 
-            auto desired_fmt = memory_format::nchw;
-
             assert(engine()->kind() == engine_kind::cpu);
 
             auto ndims = desc_.data_desc.ndims;
@@ -57,6 +55,14 @@ struct jit_uni_softmax_fwd_t : public cpu_primitive_t {
             auto axis = desc_.softmax_axis;
 
             size_t inner_size = utils::array_product(dims + axis + 1, ndims - axis - 1);
+
+            memory_format_t desired_fmt;
+            switch (ndims) {
+                case 3: desired_fmt = memory_format::ncw; break;
+                case 4: desired_fmt = memory_format::nchw; break;
+                case 5: desired_fmt = memory_format::ncdhw; break;
+                default: return status::unimplemented;
+            }
 
             bool ok = mayiuse(isa)
                       && utils::one_of(desc()->prop_kind, forward_training,
@@ -76,20 +82,20 @@ struct jit_uni_softmax_fwd_t : public cpu_primitive_t {
         jit_softmax_conf_t jpp_;
     };
 
-    jit_uni_softmax_fwd_t(const pd_t *pd, const input_vector &inputs,
+    jit_uni_softmax_fwd_t(const pd_t *apd, const input_vector &inputs,
                        const output_vector &outputs);
     ~jit_uni_softmax_fwd_t();
 
     using data_t = prec_traits<data_type::f32>::type;
 
-    virtual void execute(event_t *e) override {
+    virtual void execute(event_t *e) const override {
         execute_forward();
         e->set_state(event_t::ready);
     }
 
 private:
-    void execute_forward();
-    pd_t conf_;
+    void execute_forward() const;
+    const pd_t *pd() const { return (const pd_t *)primitive_t::pd(); }
     jit_uni_softmax_kernel_f32<isa> *kernel_;
 };
 

@@ -16,30 +16,32 @@
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma once
-#include "api/CPP/concatenation.hpp"
+#include "api/concatenation.hpp"
 #include "primitive_inst.h"
+#include <string>
+#include <memory>
 
-namespace cldnn
-{
+namespace cldnn {
 
 template <>
-struct typed_program_node<concatenation> : public typed_program_node_base<concatenation>
-{
+struct typed_program_node<concatenation> : public typed_program_node_base<concatenation> {
     using parent = typed_program_node_base<concatenation>;
+    typed_program_node(const std::shared_ptr<concatenation> prim, program_impl& prog) : parent(prim, prog) {
+        support_padding_all(true);
+    }
 
 public:
     using parent::parent;
 
-    decltype(auto) input(size_t idx = 0) const { return get_dependency(idx); }
+    program_node& input(size_t idx = 0) const { return get_dependency(idx); }
 
-    auto inputs_count() const { return desc->input.size(); }
+    size_t inputs_count() const { return desc->input.size(); }
 };
 
 using concatenation_node = typed_program_node<concatenation>;
 
 template <>
-class typed_primitive_inst<concatenation> : public typed_primitive_inst_base<concatenation>
-{
+class typed_primitive_inst<concatenation> : public typed_primitive_inst_base<concatenation> {
     using parent = typed_primitive_inst_base<concatenation>;
 
 public:
@@ -52,4 +54,4 @@ public:
 
 using concatenation_inst = typed_primitive_inst<concatenation>;
 
-}
+}  // namespace cldnn

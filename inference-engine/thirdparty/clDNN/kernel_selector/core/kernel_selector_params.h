@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2016 Intel Corporation
+// Copyright (c) 2016-2019 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,950 +17,591 @@
 #pragma once
 
 #include <string>
-#include <cstddef>
 #include <memory>
-#include <map>
+#include <cstddef>
+#include <limits>
 #include "common_types.h"
-#include "common_tools.h"
 #include "tensor_type.h"
+#include "document.h"
+#include <vector>
 
-namespace kernel_selector
-{
-    using DataTensor = Tensor::DataTensor;
-    using WeightsTensor = Tensor::WeightsTensor;
-    using DataLayout = Tensor::DataLayout;
-    using WeightsLayout = Tensor::WeightsLayout;
-    using MultiDataTensor = std::vector<DataTensor>;
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    // ParamsKey
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    class ParamsKey
-    {
-    public:
-        ParamsKey()
-        {
-            key.restrict.raw = 0;
-            key.enableTuning = 1;
-            key.machineInfo.raw = 0;
-            key.inputType.raw = 0;
-            key.outputType.raw = 0;
-            key.inputWeightsType.raw = 0;
-            key.outputWeightsType.raw = 0;
-            key.inputLayout = 0;
-            key.outputLayout = 0;
-            key.weightsInputLayout = 0;
-            key.weightsOutputLayout = 0;
-        }
+namespace kernel_selector {
+using DataTensor = Tensor::DataTensor;
+using WeightsTensor = Tensor::WeightsTensor;
+using DataLayout = Tensor::DataLayout;
+using WeightsLayout = Tensor::WeightsLayout;
+using MultiDataTensor = std::vector<DataTensor>;
 
-        struct Key
-        {
-            union restrict_t
-            {
-                struct val_t
-                {
-                    uint32_t different_types : 1;
-                    uint32_t offset : 1;
-                    uint32_t pitches : 1;
-                    uint32_t batching : 1;
-                    uint32_t biasPerFeatureMap : 1;
-                    uint32_t biasPerOutput : 1;
-                    uint32_t nonBias : 1;
-                    uint32_t activationAdditionalParamsAsInput : 1;
-                    uint32_t FP16Emulation : 1;
-                    uint32_t gradient : 1;
-                    uint32_t momentum : 1;
+class JitConstants;
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// ParamsKey
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+class ParamsKey {
+public:
+    ParamsKey() {
+        key.restrict.raw = 0;
+        key.enableTuning = 1;
+        key.machineInfo.raw = 0;
+        key.inputType.raw = 0;
+        key.outputType.raw = 0;
+        key.inputWeightsType.raw = 0;
+        key.outputWeightsType.raw = 0;
+        key.inputLayout = 0;
+        key.outputLayout = 0;
+        key.weightsInputLayout = 0;
+        key.weightsOutputLayout = 0;
+    }
 
-                    union dedicated_t
-                    {
-                        struct lookt_t
-                        {
-                            uint32_t axisX : 1;
-                            uint32_t axisY : 1;
-                            uint32_t axisFeature : 1;
-                            uint32_t axisBatch : 1;
-                            uint32_t axisXYF : 1;
-                            uint32_t indicesF32 : 1;
-                            uint32_t indicesOther : 1;
-                        } lookt;
-						struct argm_t
-						{
-							uint32_t axisX : 1;
-							uint32_t axisY : 1;
-							uint32_t axisFeature : 1;
-							uint32_t axisBatch : 1;
-							uint32_t axisXYF : 1;
-						} argm;
-                        struct norm_t
-                        {
-                            uint32_t across : 1;
-                            uint32_t within : 1;
-                            uint32_t fixedKenrelDivider : 1;
-                            uint32_t dynamicKenrelDivider : 1;
-                        } norm;
-                        struct mvn_t
-                        {
-                            uint32_t across : 1;
-                            uint32_t within : 1;
-                            uint32_t normalize_variance : 1;
-                        } mvn;
-                        struct pooling_t
-                        {
-                            uint32_t max : 1;
-                            uint32_t avg : 1;
-                            uint32_t floor : 1;
-                            uint32_t max_with_argmax : 1;
-                            uint32_t ceil : 1;
-                            uint32_t fixedKenrelDivider : 1;
-                            uint32_t dynamicKenrelDivider : 1;
-                            uint32_t dynamicKenrelDividerWithPadding : 1;
-                        } pooling;
-                        struct conv_t 
-                        {
-                            uint32_t split : 1;
-                            uint32_t dilation : 1;
-                            uint32_t depthwiseSeparableOpt : 1;
-                            uint32_t transposed : 1;
-                            uint32_t quantization : 1;
-                            uint32_t calibration : 1;
-                        } conv;
-                        struct fc_t {} fc;
-                        struct softmax_t 
-                        {
-                            uint32_t dimX : 1;
-                            uint32_t dimY : 1;
-                            uint32_t dimFeature : 1;
-                        } softmax;
-                        struct region_yolo_t
-                        {
-                            uint32_t dimX : 1;
-                            uint32_t dimY : 1;
-                            uint32_t dimFeature : 1;
-                            uint32_t coords : 1;
-                            uint32_t classes : 1;
-                            uint32_t num : 1;
-                        } region_yolo;
-                        struct reorg_yolo_t
-                        {
-                            uint32_t dimX : 1;
-                            uint32_t dimY : 1;
-                            uint32_t dimFeature : 1;
-                            uint32_t stride : 1;
-                        } reorg_yolo;
-                        struct concat_t
-                        {
-                            uint32_t axisX : 1;
-                            uint32_t axisY : 1;
-                            uint32_t axisFeature : 1;
-                            uint32_t axisBatch : 1;
-                            uint32_t kernelPerInput : 1;
-                            uint32_t oneKernel : 1;
-                        } concat;
-                        struct upsample_t
-                        {
-                            uint32_t nearest : 1;
-                            uint32_t bilinear : 1;
-                        } upsample;
-                        struct reorder_t
-                        {
-                            uint32_t winograd : 1;
-                        } reorder;
-                        struct lstm_gemm_t {
-                            uint32_t bias : 1;
-                            uint32_t hidden : 1;
-                        } lstm_gemm;
-                        struct lstm_elt_t {
-                            uint32_t cell : 1;
-                        } lstm_elt;
-                    } dedicated;
-                } val;
-                uint64_t raw;
-            } restrict;
+    struct Key {
+        union restrict_t {
+            struct val_t {
+                uint32_t different_types : 1;
+                uint32_t different_input_weights_types : 1;
+                uint32_t offset : 1;
+                uint32_t pitches : 1;
+                uint32_t batching : 1;
+                uint32_t biasPerFeatureMap : 1;
+                uint32_t biasPerOutput : 1;
+                uint32_t nonBias : 1;
+                uint32_t activationAdditionalParamsAsInput : 1;
+                uint32_t FP16Emulation : 1;
+                uint32_t gradient : 1;
+                uint32_t momentum : 1;
+                uint32_t quantization : 1;
+                uint32_t output_calibration : 1;
 
-            union machine_info_t
-            {
-                struct val_t
-                {
-                    uint32_t subgroup : 1;
-                    uint32_t subgroupShort : 1;
-                } val;
-                uint32_t raw;
-            } machineInfo;
+                union dedicated_t {
+                    struct lookt_t {
+                        uint32_t axisX : 1;
+                        uint32_t axisY : 1;
+                        uint32_t axisFeature : 1;
+                        uint32_t axisBatch : 1;
+                        uint32_t axisXYF : 1;
+                        uint32_t indicesF32 : 1;
+                        uint32_t indicesOther : 1;
+                    } lookt;
+                    struct argm_t {
+                        uint32_t axisX : 1;
+                        uint32_t axisY : 1;
+                        uint32_t axisZ : 1;
+                        uint32_t axisFeature : 1;
+                        uint32_t axisBatch : 1;
+                        uint32_t axisXYF : 1;
+                    } argm;
+                    struct idxsel_t {
+                        uint32_t axisX : 1;
+                        uint32_t axisY : 1;
+                        uint32_t axisFeature : 1;
+                        uint32_t axisBatch : 1;
+                    } idxsel;
+                    struct norm_t {
+                        uint32_t across : 1;
+                        uint32_t within : 1;
+                        uint32_t fixedKenrelDivider : 1;
+                        uint32_t dynamicKenrelDivider : 1;
+                    } norm;
+                    struct mvn_t {
+                        uint32_t across : 1;
+                        uint32_t within : 1;
+                        uint32_t normalize_variance : 1;
+                    } mvn;
+                    struct pooling_t {
+                        uint32_t max : 1;
+                        uint32_t avg : 1;
+                        uint32_t floor : 1;
+                        uint32_t max_with_argmax : 1;
+                        uint32_t ceil : 1;
+                        uint32_t bilinear : 1;
+                        uint32_t deformable_bilinear : 1;
+                        uint32_t fixedKenrelDivider : 1;
+                        uint32_t dynamicKenrelDivider : 1;
+                        uint32_t dynamicKenrelDividerWithPadding : 1;
+                        uint32_t position_sensitive : 1;
+                    } pooling;
+                    struct conv_t {
+                        uint32_t split : 1;
+                        uint32_t dilation : 1;
+                        uint32_t depthwise_separable_opt : 1;
+                        uint32_t transposed : 1;
+                        uint32_t local : 1;
+                        uint32_t grouped : 1;
+                        uint32_t deformable : 1;
+                    } conv;
+                    struct fc_t {
+                    } fc;
+                    struct softmax_t {
+                        uint32_t dimX : 1;
+                        uint32_t dimY : 1;
+                        uint32_t dimFeature : 1;
+                    } softmax;
+                    struct region_yolo_t {
+                        uint32_t dimX : 1;
+                        uint32_t dimY : 1;
+                        uint32_t dimFeature : 1;
+                        uint32_t coords : 1;
+                        uint32_t classes : 1;
+                        uint32_t num : 1;
+                    } region_yolo;
+                    struct reorg_yolo_t {
+                        uint32_t dimX : 1;
+                        uint32_t dimY : 1;
+                        uint32_t dimFeature : 1;
+                        uint32_t stride : 1;
+                    } reorg_yolo;
+                    struct concat_t {
+                        uint32_t axisX : 1;
+                        uint32_t axisY : 1;
+                        uint32_t axisZ : 1;
+                        uint32_t axisW : 1;
+                        uint32_t axisFeature : 1;
+                        uint32_t axisBatch : 1;
+                        uint32_t kernelPerInput : 1;
+                        uint32_t oneKernel : 1;
+                    } concat;
+                    struct upsample_t {
+                        uint32_t nearest : 1;
+                        uint32_t bilinear : 1;
+                    } upsample;
+                    struct reorder_t {
+                        uint32_t winograd : 1;
+                    } reorder;
+                    struct eltwise_t {
+                        uint32_t stride : 1;
+                        uint32_t broadcast : 1;
+                        uint32_t inputs_calibration : 1;
+                    } eltwise;
+                    struct lstm_gemm_t {
+                        uint32_t bias : 1;
+                        uint32_t hidden : 1;
+                    } lstm_gemm;
+                    struct lstm_dynamic_t {
+                        uint32_t last_hidden : 1;
+                        uint32_t last_cell : 1;
+                    } lstm_dynamic;
+                    struct lstm_elt_t {
+                        uint32_t cell : 1;
+                    } lstm_elt;
+                    struct fused_conv_eltw_t {
+                        // conv
+                        uint32_t split : 1;
+                        uint32_t dilation : 1;
+                        uint32_t depthwise_separable_opt : 1;
+                        uint32_t transposed : 1;
+                        uint32_t quantization : 1;
+                        uint32_t calibration : 1;
+                        uint32_t local : 1;
+                        uint32_t grouped : 1;
+                        // eltw
+                        uint32_t stride : 1;
+                        // fused conv eltw
+                        uint32_t rw_out_opt : 1;
+                    } fused_conv_eltw;
+                    struct quantize_t {
+                        uint32_t packed_binary_output : 1;
+                    } quantize;
+                } dedicated;
+            } val;
+            uint64_t raw;
+        } restrict;
 
-            static_assert(sizeof(restrict_t) == sizeof(uint64_t), "problem with union");
+        union machine_info_t {
+            struct val_t {
+                uint32_t subgroup : 1;
+                uint32_t subgroupShort : 1;
+            } val;
+            uint32_t raw;
+        } machineInfo;
 
-            typedef union DataTypesKey_t
-            {
-                struct val_t
-                {
-                    uint32_t int8 : 1;
-                    uint32_t uint8 : 1;
-                    uint32_t int16 : 1;
-                    uint32_t uint16 : 1;
-                    uint32_t int32 : 1;
-                    uint32_t uint32 : 1;
-                    uint32_t F16 : 1;
-                    uint32_t F32 : 1;
-                } val;
-                uint32_t raw;
-            } DataTypesKey;
+        static_assert(sizeof(restrict_t) == sizeof(uint64_t), "problem with union");
 
-            uint32_t enableTuning;
-            DataTypesKey inputType;
-            DataTypesKey outputType;
-            DataTypesKey inputWeightsType;
-            DataTypesKey outputWeightsType;
-            uint32_t inputLayout;
-            uint32_t outputLayout;
-            uint32_t weightsInputLayout;
-            uint32_t weightsOutputLayout;
+        typedef union DataTypesKey_t {
+            struct val_t {
+                uint32_t int8 : 1;
+                uint32_t uint8 : 1;
+                uint32_t int16 : 1;
+                uint32_t uint16 : 1;
+                uint32_t int32 : 1;
+                uint32_t uint32 : 1;
+                uint32_t int64 : 1;
+                uint32_t F16 : 1;
+                uint32_t F32 : 1;
+                uint32_t binary : 1;
+            } val;
+            uint32_t raw;
+        } DataTypesKey;
+
+        uint32_t enableTuning;
+        DataTypesKey inputType;
+        DataTypesKey outputType;
+        DataTypesKey inputWeightsType;
+        DataTypesKey outputWeightsType;
+        uint32_t inputLayout;
+        uint32_t outputLayout;
+        uint64_t weightsInputLayout;
+        uint64_t weightsOutputLayout;
+
+        static_assert(std::numeric_limits<decltype(weightsInputLayout)>::digits >= WeightsLayout::WeightsLayoutCount,
+                      "Not enough bits in weightsInputLayout to store WeightLayout bitfield");
+
+        static_assert(std::numeric_limits<decltype(weightsOutputLayout)>::digits >= WeightsLayout::WeightsLayoutCount,
+                      "Not enough bits in weightsOutputLayout to store WeightLayout bitfield");
+
+        static_assert(std::numeric_limits<decltype(inputLayout)>::digits >= DataLayout::DataLayoutCount,
+                      "Not enough bits in inputLayout to store DataLayout bitfield");
+
+        static_assert(std::numeric_limits<decltype(outputLayout)>::digits >= DataLayout::DataLayoutCount,
+                      "Not enough bits in outputLayout to store DataLayout bitfield");
+    };
+
+    void EnableInputDataType(Datatype dt);
+    void EnableAllInputDataType();
+    void EnableOutputDataType(Datatype dt);
+    void EnableAllOutputDataType();
+    void EnableInputWeightsType(WeightsType wt);
+    void EnableAllInputWeightsType();
+    void EnableOutputWeightsType(WeightsType wt);
+    void EnableAllOutputWeightsType();
+    void EnableFP16Emulation() { key.restrict.val.FP16Emulation = 1; }
+    void EnableDifferentTypes() { key.restrict.val.different_types = 1; }
+    void EnableDifferentInputWeightsTypes() { key.restrict.val.different_input_weights_types = 1; }
+    void EnableInputLayout(DataLayout l) { key.inputLayout |= (1 << l); }
+    void EnableAllInputLayout() { key.inputLayout = -1; }
+    void EnableOutputLayout(DataLayout l) { key.outputLayout |= (1 << l); }
+    void EnableAllOutputLayout() { key.outputLayout = -1; }
+    void EnableInputWeightsLayout(WeightsLayout l) { key.weightsInputLayout |= ((uint64_t)1 << l); }
+    void EnableAllInputWeightsLayout() { key.weightsInputLayout = -1; }
+    void EnableOutputWeightsLayout(WeightsLayout l) { key.weightsOutputLayout |= ((uint64_t)1 << l); }
+    void EnableAllOutputWeightsLayout() { key.weightsOutputLayout = -1; }
+    void EnableTensorOffset() { key.restrict.val.offset = 1; }
+    void EnableTensorPitches() { key.restrict.val.pitches = 1; }
+    void EnableBatching() { key.restrict.val.batching = 1; }
+    void EnableGradient() { key.restrict.val.gradient = 1; }
+    void EnableSubGroup() { key.machineInfo.val.subgroup = 1; }
+    void EnableSubGroupShort() { key.machineInfo.val.subgroupShort = 1; }
+    void EnableNonBiasTerm() { key.restrict.val.nonBias = 1; }
+    void EnableBiasPerFeature() { key.restrict.val.biasPerFeatureMap = 1; }
+    void EnableBiasPerOutput() { key.restrict.val.biasPerOutput = 1; }
+    void EnableActivationAdditionalParamsAsInput() { key.restrict.val.activationAdditionalParamsAsInput = 1; }
+    void EnableMomentum() { key.restrict.val.momentum = 1; }
+    void EnableLRNMode(LRNMode m);
+    void EnableLookUpTableAxis(LookUpTableAxis m);
+    void EnableNormalizeMode(NormalizeMode m);
+    void EnableMVNMode(MVNMode m);
+    void EnableMVNNormalizeVariance();
+    void EnableLRNKernelDividerMode(KernelDividerMode m);
+    void EnablePoolKernelDividerMode(KernelDividerMode m);
+    void EnablePoolType(PoolType t);
+    void EnablePoolRemainder(PoolRemainder r);
+    void EnablePositionSensitivePooling() { key.restrict.val.dedicated.pooling.position_sensitive = 1; }
+    void EnableSplitSupport() { key.restrict.val.dedicated.conv.split = 1; }
+    void EnableDilation() { key.restrict.val.dedicated.conv.dilation = 1; }
+    void EnableDepthwiseSeparableOpt() { key.restrict.val.dedicated.conv.depthwise_separable_opt = 1; }
+    void EnableLocalConvolution() { key.restrict.val.dedicated.conv.local = 1; }
+    void EnableGroupedConvolution() { key.restrict.val.dedicated.conv.grouped = 1; }
+    void EnableTranspose() { key.restrict.val.dedicated.conv.transposed = 1; }
+    void EnableInt8Quantization() { key.restrict.val.quantization = 1; }
+    void EnableOutputCalibration() { key.restrict.val.output_calibration = 1; }
+    void EnableDeformableMode() { key.restrict.val.dedicated.conv.deformable = 1; }
+
+    void EnableFusedConvEltwSplitSupport() { key.restrict.val.dedicated.fused_conv_eltw.split = 1; }
+    void EnableFusedConvEltwDilation() { key.restrict.val.dedicated.fused_conv_eltw.dilation = 1; }
+    void EnableFusedConvEltwDepthwiseSeparableOpt() {
+        key.restrict.val.dedicated.fused_conv_eltw.depthwise_separable_opt = 1;
+    }
+    void EnableFusedConvEltwLocalConvolution() { key.restrict.val.dedicated.fused_conv_eltw.local = 1; }
+    void EnableFusedConvEltwGroupedConvolution() { key.restrict.val.dedicated.fused_conv_eltw.grouped = 1; }
+    void EnableFusedConvEltwTranspose() { key.restrict.val.dedicated.fused_conv_eltw.transposed = 1; }
+    void EnableFusedConvEltwInt8Quantization() { key.restrict.val.dedicated.fused_conv_eltw.quantization = 1; }
+    void EnableFusedConvEltwOutputCalibration() { key.restrict.val.dedicated.fused_conv_eltw.calibration = 1; }
+    void EnableFusedConvEltwEltwiseStride();
+
+    void EnableQuantizePackedBinaryOutput() { key.restrict.val.dedicated.quantize.packed_binary_output = 1; }
+
+    void EnableWinogradReorder() { key.restrict.val.dedicated.reorder.winograd = 1; }
+    void EnableSoftmaxDim(SoftmaxDim d);
+    void EnableConcatAxis(ConcatAxis a);
+    void EnableUpSamplingSampleType(SampleType a);
+    void EnableEltwiseStride();
+    void EnableEltwiseBroadcast() { key.restrict.val.dedicated.eltwise.broadcast = 1; }
+    void EnableEltwiseInputsCalibration() { key.restrict.val.dedicated.eltwise.inputs_calibration = 1; }
+
+    void EnableLSTMGEMMBias() { key.restrict.val.dedicated.lstm_gemm.bias = 1; }
+    void EnableLSTMGEMMHidden() { key.restrict.val.dedicated.lstm_gemm.hidden = 1; }
+    void EnableLSTMEltCell() { key.restrict.val.dedicated.lstm_elt.cell = 1; }
+    void EnableLSTMDyanmicOptionalHiddenOutput() { key.restrict.val.dedicated.lstm_dynamic.last_hidden = 1; }
+    void EnableLSTMDyanmicOptionalCellOutput() { key.restrict.val.dedicated.lstm_dynamic.last_cell = 1; }
+    void EnableConcatKernelPerInput() { key.restrict.val.dedicated.concat.kernelPerInput = 1; }
+    void DisableTuning() { key.enableTuning = 0; }
+    void EnableConcatOneKernel() { key.restrict.val.dedicated.concat.oneKernel = 1; }
+    void EnableArgMaxMinAxis(ArgMaxMinAxis a);
+    void EnableLookUpTableIndicesFormat(Datatype a);
+    void EnableIndexSelectAxis(IndexSelectAxis a);
+    void EnableFusedConvEltwiseRWOutOpt();
+    bool Support(const ParamsKey& k) const;
+    bool TuningSupport() const {
+        if (key.enableTuning == 1)
+            return true;
+        return false;
+    }
+    bool isEnabledDifferentInputWeightsTypes() const {
+        return key.restrict.val.different_input_weights_types ? true : false;
+    }
+    ParamsKey Merge(const ParamsKey& k) const;
+
+private:
+    Key key;
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// EngineInfo
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+struct EngineInfo {
+    bool bSubGroupSupport = false;
+    bool bSubGroupShortSupport = false;
+    bool bFP16Support = false;
+    bool bFP64Support = false;
+    bool bImageSupport = false;
+    bool bIMADSupport = false;
+    bool bIMMADSupport = false;
+    uint32_t computeUnitsCount = 0;
+    uint64_t maxWorkGroupSize = 0;
+    uint64_t maxLocalMemSize = 0;
+    uint64_t maxImage2dWidth = 0;
+    uint64_t maxImage2dHeight = 0;
+    std::string deviceId = "";
+    std::string driverVersion = "";
+    std::string hostVersion = "";
+    std::shared_ptr<rapidjson::Document> deviceCache;
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Params
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+struct Params {
+    virtual ~Params() {}
+
+    KernelType GetType() const { return kType; }
+    virtual ParamsKey GetParamsKey() const;
+
+protected:
+    Params(KernelType kt, const std::string& id) : kType(kt), layerID(id) {}
+    KernelType kType;
+
+public:
+    std::string layerID;
+    EngineInfo engineInfo;
+
+    virtual std::string to_string() const;
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// base_activation_params
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+struct base_activation_params {
+    ActivationFunction function = ActivationFunction::NONE;
+    float m = 1.f;
+    float n = 0.f;
+    bool gradient = false;
+
+    base_activation_params() = default;
+    base_activation_params(const float m, const float n) : m(m), n(n) {}
+    base_activation_params(const ActivationFunction f, const float m, const float n, const bool gradinet = false) : function(f),
+                                                                                                                    m(m),
+                                                                                                                    n(n),
+                                                                                                                    gradient(gradinet) {}
+
+    virtual std::string to_string() const;
+};
+
+struct FusedOpsConfiguration {
+    std::string suffix;
+    std::vector<std::string> bfyx_idx_order;
+    std::string input_var_name;
+    size_t vec_size;
+    bool aligned_load;
+    bool typed_activation;
+    bool safe_load;
+    bool simple_offset;
+
+    FusedOpsConfiguration(std::string suffix,
+                          std::vector<std::string> bfyx_idx_order,
+                          std::string input_var_name,
+                          size_t vec_size = 1,
+                          bool aligned_load = false,
+                          bool typed_activation = false,
+                          bool safe_load = true,
+                          bool simple_offset = false)
+      : suffix(suffix)
+      , bfyx_idx_order(bfyx_idx_order)
+      , input_var_name(input_var_name)
+      , vec_size(vec_size)
+      , aligned_load(aligned_load)
+      , typed_activation(typed_activation)
+      , safe_load(safe_load)
+      , simple_offset(simple_offset) { }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// base_params
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+struct base_params : public Params {
+    virtual ~base_params() {}
+
+    // Instance of fused_operation_desc is added to fused_ops vector if a node has been fused to current one using program_impl::fuse_nodes
+    // method. In order to process fused ops following modifications should be done in a kernel:
+    // option 1 - using common generator:
+    //     - create FusedOpsConfiguration object that contains configuration for common code generator.
+    //       Multiple objects can be created if a kernel uses different data types at the same time. E.g. kernels that contains scalar and
+    //       vector branches that are chosen in runtime. To handle this case, create 2 configurations with different suffixes, like
+    //       "_SCALAR" and "_VEC" and then use generated macros accordingly.
+    //     - add jit constants returned by KernelBase::MakeFusedOpsJitConstants method to the kernel's constants.
+    //     - insert generated macros in the ocl code:
+    //       in kernel declaration:
+    //         #if HAS_FUSED_OPS_DECLS
+    //           FUSED_OPS_DECLS,
+    //         #endif
+    //       in kernel body:
+    //         #if HAS_FUSED_OPS
+    //           FUSED_OPS<OPTIONAL_SUFFIX>;
+    //           <SOME_VARIABLE> = FINAL_NAME<OPTIONAL_SUFFIX>;
+    //         #endif
+    //   In this case common generator creates set of definitions for each op which are called sequentially in FUSED_OP<OPTIONAL_SUFFIX>
+    //   macro. Example:
+    //     #define FUSED_OPS
+    //       FUSED_OP0_LOAD_VEC
+    //       FUSED_OP0_ACTION_VEC
+    //       FUSED_OP1_LOAD_VEC
+    //       FUSED_OP1_ACTION_VEC
+    //     #define FUSED_OP0_LOAD_VEC
+    //       MAKE_VECTOR_TYPE(FUSED_OP_0_INPUT0_TYPE,2) activation0_data0 = UNIT_BLOCK_READ(activation0_input0,
+    //                                                                      FUSED_OP_0_INPUT0_GET_INDEX_SAFE(0,(f_block*16),0,0));
+    //     #define FUSED_OP0_ACTION_VEC
+    //       float2 dst_0 = dst;
+    //       dst_0 = ACTIVATION_FUSED_OP0_VEC(dst_0, ACTIVATION_PARAMS_FUSED_OP0_VEC);
+    //     #define FUSED_OP1_LOAD_VEC
+    //       MAKE_VECTOR_TYPE(FUSED_OP_1_INPUT0_TYPE,2) eltwise1_data0 = UNIT_BLOCK_READ2(eltwise1_input0,
+    //                                                                   FUSED_OP_1_INPUT0_GET_INDEX_SAFE(0,(f_block*16),y,x));
+    //     #define FUSED_OP1_ACTION_VEC
+    //       float2 dst_0_2 = convert_float2(eltwise1_data0) + convert_float2(dst_0);
+    //     #define FINAL_NAME_VEC dst_0_2
+    // option 2 - using custom generator in a kernel. It can be used if performance is not optimal in the common one or to handle
+    //            some difficult cases that can't be unified. Custom processing of fused ops can be written absolutely independently
+    //            in a kernel, but to make it easier set of helper functions exist:
+    //     - KernelBase::MakeFusedOpsDeclsJitConstants that creates arguments for kernel declaration and macro for all tensors used in
+    //       a fused op (requires FusedOpsConfiguration instance).
+    //     - fused_operation_desc contains a bunch of methods to generate variable/pointer names, type conversions, data loads
+    //  If you need an example of custom code generation for fused ops, check BinaryConvolutionKernelGeneric::GetFusedPrimitivesJitConstants
+    //  method in binary_convolution_kernel_generic.cpp.
+    struct fused_operation_desc {
+        enum class Type : uint8_t {
+            ELTWISE = 0,
+            SCALE = 1,
+            QUANTIZE = 2,
+            ACTIVATION = 3,
+            UNDEFINED
         };
 
-        void EnableInputDataType(Datatype dt)
-        {
-            switch (dt)
-            {
-            case Datatype::INT8:
-                key.inputType.val.int8 = 1;
-                break;
-            case Datatype::UINT8:
-                key.inputType.val.uint8 = 1;
-                break;
-            case Datatype::INT16:
-                key.inputType.val.int16 = 1;
-                break;
-            case Datatype::UINT16:
-                key.inputType.val.uint16 = 1;
-                break;
-            case Datatype::INT32:
-                key.inputType.val.int32 = 1;
-                break;
-            case Datatype::UINT32:
-                key.inputType.val.uint32 = 1;
-                break;
-            case Datatype::F16:
-                key.inputType.val.F16 = 1;
-                break;
-            case Datatype::F32:
-                key.inputType.val.F32 = 1;
-                break;
-            default:
-                break;
+        struct idx_desc {
+            std::string b;
+            std::string f;
+            std::string z;
+            std::string y;
+            std::string x;
+            size_t dims;
+            explicit idx_desc(std::vector<std::string> idx) : b(""), f(""), z(""), y(""), x(""), dims(0) {
+                dims = idx.size();
+                switch (dims) {
+                    case 1: f = idx[0]; break;
+                    case 2: b = idx[0]; f = idx[1]; break;
+                    case 3: b = idx[0]; f = idx[1]; y = idx[2]; break;
+                    case 4: b = idx[0]; f = idx[1]; y = idx[2]; x = idx[3]; break;
+                    case 5: b = idx[0]; f = idx[1]; z = idx[2]; y = idx[3]; x = idx[4]; break;
+                    default: throw std::runtime_error("More than 5 dimenstions is not supported in fused op generator");
+                }
             }
-        }
+        };
 
-        void EnableAllInputDataType()
-        {
-            key.inputType.raw = 0xffffffff;
-        }
+        Type type;
+        size_t dep_idx_start;
+        size_t dep_size;
+        MultiDataTensor tensors;
+        DataTensor output_tensor;
+        base_activation_params activation;
+        size_t op_id;
 
-        void EnableOutputDataType(Datatype dt)
-        {
-            switch (dt)
-            {
-            case Datatype::INT8:
-                key.outputType.val.int8 = 1;
-                break;
-            case Datatype::UINT8:
-                key.outputType.val.uint8 = 1;
-                break;
-            case Datatype::INT16:
-                key.outputType.val.int16 = 1;
-                break;
-            case Datatype::UINT16:
-                key.outputType.val.uint16 = 1;
-                break;
-            case Datatype::INT32:
-                key.outputType.val.int32 = 1;
-                break;
-            case Datatype::UINT32:
-                key.outputType.val.uint32 = 1;
-                break;
-            case Datatype::F16:
-                key.outputType.val.F16 = 1;
-                break;
-            case Datatype::F32:
-                key.outputType.val.F32 = 1;
-                break;
-            default:
-                break;
-            }
-        }
+        JitConstants MakeFusedTensorJitConstants(const FusedOpsConfiguration& conf) const;
+        JitConstants MakeInputDeclsJitConstants(const FusedOpsConfiguration& conf) const;
+        JitConstants MakeLoadJitConstants(const FusedOpsConfiguration& conf) const;
+        JitConstants MakeOpJitConstants(const FusedOpsConfiguration& conf, std::string in_var, std::string& out_var) const;
 
-        void EnableAllOutputDataType()
-        {
-            key.outputType.raw = 0xffffffff;
-        }
-
-        void EnableInputWeightsType(WeightsType wt)
-        {
-            switch (wt)
-            {
-            case WeightsType::F16:
-                key.inputWeightsType.val.F16 = 1;
-                break;
-            case WeightsType::F32:
-                key.inputWeightsType.val.F32 = 1;
-                break;
-            case WeightsType::INT8:
-                key.inputWeightsType.val.int8 = 1;
-                break;
-            default:
-                break;
-            }
-        }
-
-        void EnableAllInputWeightsType()
-        {
-            key.inputWeightsType.raw = 0xffffffff;
-        }
-
-        void EnableOutputWeightsType(WeightsType wt)
-        {
-            switch (wt)
-            {
-            case WeightsType::F16:
-                key.outputWeightsType.val.F16 = 1;
-                break;
-            case WeightsType::F32:
-                key.outputWeightsType.val.F32 = 1;
-                break;
-            case WeightsType::INT8:
-                key.outputWeightsType.val.int8 = 1;
-                break;
-            default:
-                break;
-            }
-        }
-
-        void EnableAllOutputWeightsType()
-        {
-            key.outputWeightsType.raw = 0xffffffff;
-        }
-
-        void EnableFP16Emulation()
-        {
-            key.restrict.val.FP16Emulation = 1;
-        }
-
-        void EnableDifferentTypes()
-        {
-            key.restrict.val.different_types = 1;
-        }
-
-        void EnableInputLayout(DataLayout l)
-        {
-            key.inputLayout |= (1 << l);
-        }
-
-        void EnableAllInputLayout()
-        {
-            key.inputLayout = 0xffffffff;
-        }
-
-        void EnableOutputLayout(DataLayout l)
-        {
-            key.outputLayout |= (1 << l);
-        }
-
-        void EnableAllOutputLayout()
-        {
-            key.outputLayout = 0xffffffff;
-        }
-
-        void EnableInputWeightsLayout(WeightsLayout l)
-        {
-            key.weightsInputLayout |= (1 << l);
-        }
-
-        void EnableAllInputWeightsLayout()
-        {
-            key.weightsInputLayout = 0xffffffff;
-        }
-
-        void EnableOutputWeightsLayout(WeightsLayout l)
-        {
-            key.weightsOutputLayout |= (1 << l);
-        }
-
-        void EnableAllOutputWeightsLayout()
-        {
-            key.weightsOutputLayout = 0xffffffff;
-        }
-
-        void EnableTensorOffset()
-        {
-            key.restrict.val.offset = 1;
-        }
-
-        void EnableTensorPitches()
-        {
-            key.restrict.val.pitches = 1;
-        }
-
-        void EnableBatching()
-        {
-            key.restrict.val.batching = 1;
-        }
-
-        void EnableGradient()
-        {
-            key.restrict.val.gradient = 1;
-        }
-
-        void EnableSubGroup()
-        {
-            key.machineInfo.val.subgroup = 1;
-        }
-
-        void EnableSubGroupShort()
-        {
-            key.machineInfo.val.subgroupShort = 1;
-        }
-
-        void EnableNonBiasTerm()
-        {
-            key.restrict.val.nonBias = 1;
-        }
-
-        void EnableBiasPerFeature()
-        {
-            key.restrict.val.biasPerFeatureMap = 1;
-        }
-
-        void EnableBiasPerOutput()
-        {
-            key.restrict.val.biasPerOutput = 1;
-        }
-
-        void EnableActivationAdditionalParamsAsInput()
-        {
-            key.restrict.val.activationAdditionalParamsAsInput = 1;
-        }
-
-        void EnableMomentum()
-        {
-            key.restrict.val.momentum = 1;
-        }
-
-        void EnableLRNMode(LRNMode m)
-        {
-            switch (m)
-            {
-            case LRNMode::ACROSS_CHANNEL:
-                key.restrict.val.dedicated.norm.across = 1;
-                break;
-            case LRNMode::WITHIN_CHANNEL:
-                key.restrict.val.dedicated.norm.within = 1;
-                break;
-            default:
-                break;
-            }
-        }
-
-        void EnableLookUpTableAxis(LookUpTableAxis m) 
-        {
-            switch (m)
-            {
-            case kernel_selector::LookUpTableAxis::BATCH:
-                key.restrict.val.dedicated.lookt.axisBatch = 1;
-                break;
-            case kernel_selector::LookUpTableAxis::FEATURE:
-                key.restrict.val.dedicated.lookt.axisFeature = 1;
-                break;
-            case kernel_selector::LookUpTableAxis::X:
-                key.restrict.val.dedicated.lookt.axisX = 1;
-                break;
-            case kernel_selector::LookUpTableAxis::Y:
-                key.restrict.val.dedicated.lookt.axisY = 1;
-                break;
-            case kernel_selector::LookUpTableAxis::XYF:
-                key.restrict.val.dedicated.lookt.axisXYF = 1;
-                break;
-            default:
-                break;
-            }
-        }
-
-        void EnableNormalizeMode(NormalizeMode m)
-        {
-            switch (m)
-            {
-            case NormalizeMode::ACROSS_SPATIAL:
-                key.restrict.val.dedicated.norm.across = 1;
-                break;
-            case NormalizeMode::WITHIN_SPATIAL:
-                key.restrict.val.dedicated.norm.within = 1;
-                break;
-            default:
-                break;
-            }
-        }
-
-        void EnableMVNMode(MVNMode m)
-        {
-            switch (m)
-            {
-            case MVNMode::ACROSS_CHANNELS:
-                key.restrict.val.dedicated.mvn.across = 1;
-                break;
-            case MVNMode::WITHIN_CHANNELS:
-                key.restrict.val.dedicated.mvn.within = 1;
-                break;
-            default:
-                break;
-            }
-        }
-
-        void EnableMVNNormalizeVariance()
-        {
-            key.restrict.val.dedicated.mvn.normalize_variance = 1;
-        }
-
-        void EnableLRNKernelDividerMode(KernelDividerMode m)
-        {
-            switch (m)
-            {
-            case KernelDividerMode::FIXED:
-                key.restrict.val.dedicated.norm.fixedKenrelDivider = 1;
-                break;
-            case KernelDividerMode::DYNAMIC:
-                key.restrict.val.dedicated.norm.dynamicKenrelDivider = 1;
-                break;
-            default:
-                break;
-            }
-        }
-
-        void EnablePoolKernelDividerMode(KernelDividerMode m)
-        {
-            switch (m)
-            {
-            case KernelDividerMode::FIXED:
-                key.restrict.val.dedicated.pooling.fixedKenrelDivider = 1;
-                break;
-            case KernelDividerMode::DYNAMIC:
-                key.restrict.val.dedicated.pooling.dynamicKenrelDivider = 1;
-                break;
-            case KernelDividerMode::DYNAMIC_WITH_PADDING:
-                key.restrict.val.dedicated.pooling.dynamicKenrelDividerWithPadding = 1;
-                break;
-            default:
-                break;
-            }
-        }
-
-        void EnablePoolType(PoolType t)
-        {
-            switch (t)
-            {
-            case PoolType::MAX:
-                key.restrict.val.dedicated.pooling.max = 1;
-                break;
-            case PoolType::AVG:
-                key.restrict.val.dedicated.pooling.avg = 1;
-                break;
-            case PoolType::MAX_WITH_ARGMAX:
-                key.restrict.val.dedicated.pooling.max_with_argmax = 1;
-                break;
-            default:
-                break;
-            }
-        }
-
-        void EnablePoolRemainder(PoolRemainder r)
-        {
-            switch (r)
-            {
-            case PoolRemainder::FLOOR:
-                key.restrict.val.dedicated.pooling.floor = 1;
-                break;
-            case PoolRemainder::CEIL:
-                key.restrict.val.dedicated.pooling.ceil = 1;
-                break;
-            default:
-                break;
-            }
-        }
-
-        void EnableSplitSupport()
-        {
-            key.restrict.val.dedicated.conv.split = 1;
-        }
-
-        void EnableDilation()
-        {
-            key.restrict.val.dedicated.conv.dilation = 1;
-        }
-
-        void EnableDepthwiseSeparableOpt()
-        {
-            key.restrict.val.dedicated.conv.depthwiseSeparableOpt = 1;
-        }
-
-        void EnableTranspose()
-        {
-            key.restrict.val.dedicated.conv.transposed = 1;
-        }
-
-        void EnableInt8Quantization()
-        {
-            key.restrict.val.dedicated.conv.quantization = 1;
-        }
-
-        void EnableOutputCalibration()
-        {
-            key.restrict.val.dedicated.conv.calibration = 1;
-        }
-
-        void EnableWinogradReorder()
-        {
-            key.restrict.val.dedicated.reorder.winograd = 1;
-        }
-
-        void EnableSoftmaxDim(SoftmaxDim d)
-        {
-            switch (d)
-            {
-            case SoftmaxDim::X:
-                key.restrict.val.dedicated.softmax.dimX = 1;
-                break;
-            case SoftmaxDim::Y:
-                key.restrict.val.dedicated.softmax.dimY = 1;
-                break;
-            case SoftmaxDim::FEATURE:
-                key.restrict.val.dedicated.softmax.dimFeature = 1;
-                break;
-            default:
-                break;
-            }
-        }
-
-        void EnableConcatAxis(ConcatAxis a)
-        {
-            switch (a)
-            {
-            case ConcatAxis::X:
-                key.restrict.val.dedicated.concat.axisX = 1;
-                break;
-            case ConcatAxis::Y:
-                key.restrict.val.dedicated.concat.axisY = 1;
-                break;
-            case ConcatAxis::FEATURE:
-                key.restrict.val.dedicated.concat.axisFeature = 1;
-                break;
-            case ConcatAxis::BATCH:
-                key.restrict.val.dedicated.concat.axisBatch = 1;
-                break;
-            default:
-                break;
-            }
-        }
-
-        void EnableUpSamplingSampleType(SampleType a)
-        {
-            switch (a)
-            {
-            case SampleType::NEAREST:
-                key.restrict.val.dedicated.upsample.nearest = 1;
-                break;
-            case SampleType::BILINEAR:
-                key.restrict.val.dedicated.upsample.bilinear = 1;
-                break;
-            default:
-                break;
-            }
-        }
-
-        void EnableLSTMGEMMBias() {
-            key.restrict.val.dedicated.lstm_gemm.bias = 1;
-        }
-
-        void EnableLSTMGEMMHidden() {
-            key.restrict.val.dedicated.lstm_gemm.hidden = 1;
-        }
-
-        void EnableLSTMEltCell() {
-            key.restrict.val.dedicated.lstm_elt.cell = 1;
-        }
-
-
-        void EnableConcatKernelPerInput()
-        {
-            key.restrict.val.dedicated.concat.kernelPerInput = 1;
-        }
-
-        void DisableTuning()
-        {
-            key.enableTuning = 0;
-        }
-        
-        void EnableConcatOneKernel()
-        {
-            key.restrict.val.dedicated.concat.oneKernel = 1;
-        }
-
-		void EnableArgMaxMinAxis(ArgMaxMinAxis a) 
-        {
-			switch (a)
-			{
-			case ArgMaxMinAxis::X:
-				key.restrict.val.dedicated.argm.axisX = 1;
-				break;
-			case ArgMaxMinAxis::Y:
-				key.restrict.val.dedicated.argm.axisY = 1;
-				break;
-			case ArgMaxMinAxis::FEATURE:
-				key.restrict.val.dedicated.argm.axisFeature = 1;
-				break;
-			case ArgMaxMinAxis::BATCH:
-				key.restrict.val.dedicated.argm.axisBatch = 1;
-				break;
-			case ArgMaxMinAxis::XYF:
-				key.restrict.val.dedicated.argm.axisXYF = 1;
-				break;
-			default:
-				break;
-			}
-		}
-
-        void EnableLookUpTableIndicesFormat(Datatype a)
-        {
-            if (a == Datatype::F32)
-                key.restrict.val.dedicated.lookt.indicesF32 = 1;
-            else
-                key.restrict.val.dedicated.lookt.indicesOther = 1;
-        }
-
-        bool Support(const ParamsKey& k) const
-        {
-            return
-                ((key.restrict.raw & k.key.restrict.raw) == k.key.restrict.raw) && // check if this kernel supports this params
-                ((key.machineInfo.raw & k.key.machineInfo.raw) == key.machineInfo.raw) && // check if machine supports this kernel
-                ((key.inputType.raw & k.key.inputType.raw) == k.key.inputType.raw) &&
-                ((key.outputType.raw & k.key.outputType.raw) == k.key.outputType.raw) &&
-                ((key.inputWeightsType.raw & k.key.inputWeightsType.raw) == k.key.inputWeightsType.raw) &&
-                ((key.outputWeightsType.raw & k.key.outputWeightsType.raw) == k.key.outputWeightsType.raw) &&
-                ((key.inputLayout & k.key.inputLayout) != 0 || key.inputLayout == k.key.inputLayout) &&
-                ((key.outputLayout & k.key.outputLayout) != 0 || key.outputLayout == k.key.outputLayout) &&
-                ((key.weightsInputLayout & k.key.weightsInputLayout) != 0 || key.weightsInputLayout == k.key.weightsInputLayout) &&
-                ((key.weightsOutputLayout & k.key.weightsOutputLayout) != 0 || key.weightsOutputLayout == k.key.weightsOutputLayout);
-        }
-
-        bool TuningSupport() const
-        {
-            if (key.enableTuning == 1)
-                return true;
-            return false;
-        }
-
-        ParamsKey Merge(const ParamsKey& k) const
-        {
-            ParamsKey ret;
-            ret.key.restrict.raw = key.restrict.raw | k.key.restrict.raw;
-            ret.key.machineInfo.raw = key.machineInfo.raw | k.key.machineInfo.raw;
-            ret.key.inputType.raw = key.inputType.raw | k.key.inputType.raw;
-            ret.key.outputType.raw = key.outputType.raw | k.key.outputType.raw;
-            ret.key.inputWeightsType.raw = key.inputWeightsType.raw | k.key.inputWeightsType.raw;
-            ret.key.outputWeightsType.raw = key.outputWeightsType.raw | k.key.outputWeightsType.raw;
-            ret.key.inputLayout = key.inputLayout | k.key.inputLayout;
-            ret.key.outputLayout = key.outputLayout | k.key.outputLayout;
-            ret.key.weightsInputLayout = key.weightsInputLayout | k.key.weightsInputLayout;
-            ret.key.weightsOutputLayout = key.weightsOutputLayout | k.key.weightsOutputLayout;
-            return ret;
-        }
-
-    private:
-        Key key;
+        // Helper functions for operation generation
+        std::string GetTypeStr() const;
+        std::string GetInputTensorName(size_t input_id) const;
+        std::string GetOutputTensorName() const;
+        std::string GetInputTypeName(size_t input_id, size_t vec_size) const;
+        std::string GetJitLoad(const FusedOpsConfiguration& conf, size_t input_id,
+                               bool reuse_index = false, std::string reused_idx = "") const;
+        std::string GetIdx(size_t input_id, idx_desc idx, bool should_be_safe) const;
+        std::string GetInputPtrName(size_t input_id) const;
+        std::string GetInputVarName(size_t input_id) const;
+        std::string GetOutputVarName(std::string input_var_name) const;
+        std::string ConvertToOutputType(std::string var, size_t vec_size = 1) const;
+        std::string ConvertToOutputTypeSat(std::string var, size_t vec_size = 1) const;
+        std::string GetOutputType(size_t vec_size = 1) const;
     };
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    // EngineInfo
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    struct EngineInfo
-    {
-        bool bSubGroupSupport = false;
-        bool bSubGroupShortSupport = false;
-        bool bFP16Support = false;
-        bool bFP64Support = false;
-        bool bImageSupport = false;
-        uint64_t maxWorkGroupSize = 0;
-        uint64_t maxLocalMemSize = 0;
-        uint64_t maxImage2dWidth = 0;
-        uint64_t maxImage2dHeight = 0;
-        std::string deviceId = "";
-        std::string driverVersion = "";
-        std::string hostVersion = "";
-    };
+    base_activation_params activation;
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    // Params
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    struct Params
-    {
-        virtual ~Params() {}
+    std::vector<base_activation_params> activations;
+    std::vector<fused_operation_desc> fused_ops = {};
+    MultiDataTensor inputs;
+    DataTensor output;
+    bool gradient = false;
 
-        KernelType GetType() const { return kType; }
-        virtual ParamsKey GetParamsKey() const
-        {
-            ParamsKey k;
+    virtual std::string to_string() const;
+    virtual ParamsKey GetParamsKey() const;
 
-            if (engineInfo.bSubGroupSupport)
-            {
-                k.EnableSubGroup();
-            }
+protected:
+    explicit base_params(KernelType kt) : Params(kt, ""), inputs(1) {}
+};
 
-            if (engineInfo.bSubGroupShortSupport)
-            {
-                k.EnableSubGroupShort();
-            }
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Auto tuner parameters
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+class KernelRunnerInterface;
+struct TuningParams {
+    TuningMode mode;
+    std::string cacheFilePath;
+    std::shared_ptr<KernelRunnerInterface> runner;
 
-            return k;
-        }
+    TuningParams() : mode(TuningMode::TUNING_DISABLED), cacheFilePath(""), runner(nullptr) {}
+};
 
-    protected:
-        Params(KernelType kt, const std::string& id) : kType(kt), layerID(id) {}
-        KernelType kType;
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// optional_params
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+struct optional_params {
+    virtual ~optional_params() {}
 
-    public:
-        std::string layerID;
-        EngineInfo engineInfo;
+    KernelType GetType() const { return kType; }
 
-        virtual std::string to_string() const;
-    };
+    std::vector<DataLayout> inputLayouts;
+    std::vector<DataLayout> outputLayouts;
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    // base_params
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    struct base_params : public Params
-    {
-        virtual ~base_params() {}
+    bool meaningfulKernelsNames = false;  // use layer name instead of internal kernel name
+    bool allowStaticInputReordering =
+        true;  // allow kernel to provide a kernel which reorder static data like weights/bias/tables...
+    bool allowInputReordering =
+        false;  // allow kernel to ask graph compiler to reorder the input data before executing its
+    bool allowOutputReordering =
+        false;  // allow kernel to ask graph compiler to reorder the output data before executing the next kernel
 
-        ActivationFunction  activationFunc = ActivationFunction::NONE;
-        NonLinearParams     activationParams;
-        MultiDataTensor     inputs;
-        DataTensor          output;
-        bool                gradient = false;
+    TuningParams tuningParams;
 
-        virtual std::string to_string() const;
+    virtual ParamsKey GetSupportedKey() const;
 
-        virtual ParamsKey GetParamsKey() const
-        {
-            ParamsKey k = Params::GetParamsKey();
-
-            bool bBatching = false;
-            bool bPitches = false;
-            bool bOffests = false;
-            bool bDifferentTypes = false;
-            bool bFP16Used = (output.GetDType() == Datatype::F16);
-
-            for (const auto& i : inputs)
-            {
-                k.EnableInputDataType(i.GetDType());
-                k.EnableInputLayout(i.GetLayout());
-
-                bBatching       |= (i.Batch().v > 1);
-                bPitches        |= (i.PitchesDifferFromLogicalDims());
-                bOffests        |= (i.GetFirstElementOffset() != 0);
-                bDifferentTypes |= (i.GetDType() != output.GetDType());
-                bFP16Used       |= (i.GetDType() == Datatype::F16);
-            }
-
-            k.EnableOutputDataType(output.GetDType());
-            k.EnableOutputLayout(output.GetLayout());
-
-            if (bBatching)
-            {
-                k.EnableBatching();
-            }
-
-            if (bPitches ||
-                output.PitchesDifferFromLogicalDims())
-            {
-                k.EnableTensorPitches();
-            }
-
-            if (bDifferentTypes)
-            {
-                k.EnableDifferentTypes();
-            }
-
-            if (bOffests ||
-                output.GetFirstElementOffset() != 0)
-            {
-                k.EnableTensorOffset();
-            }
-
-            if (!engineInfo.bFP16Support &&
-                bFP16Used)
-            {
-                // I'm not sure it's the best idea, but we can live with it right now
-                k.EnableFP16Emulation();
-            }
-
-            if (gradient)
-            {
-                k.EnableGradient();
-            }
-
-            return k;
-        }
-
-    protected:
-
-        base_params(KernelType kt) : Params(kt, ""), inputs(1){}
-    };
-
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    // Auto tuner parameters
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    class KernelRunnerInterface;
-    struct TuningParams
-    {
-        TuningMode mode;
-        std::string cacheFilePath;
-        std::shared_ptr<KernelRunnerInterface> runner;
-
-        TuningParams() : mode(TuningMode::TUNING_DISABLED), cacheFilePath(""), runner(nullptr) {}
-    };
-
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    // optional_params
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    struct optional_params
-    {
-        virtual ~optional_params() {}
-
-        KernelType GetType() const { return kType; }
-
-        std::vector<DataLayout> inputLayouts;
-        std::vector<DataLayout> outputLayouts;
-
-        bool meaningfulKernelsNames     = false;    // use layer name instead of internal kernel name
-        bool allowStaticInputReordering = true;     // allow kernel to provide a kernel which reorder static data like weights/bias/tables...
-        bool allowInputReordering       = false;    // allow kernel to ask graph compiler to reorder the input data before executing its
-        bool allowOutputReordering      = false;    // allow kernel to ask graph compiler to reorder the output data before executing the next kernel
-
-        TuningParams tuningParams;
-
-        virtual ParamsKey GetSupportedKey() const
-        {
-            ParamsKey k;
-
-            for (auto l : inputLayouts)
-            {
-                k.EnableInputLayout(l);
-            }
-
-            for (auto l : outputLayouts)
-            {
-                k.EnableOutputLayout(l);
-            }
-
-            return k;
-        }
-
-    protected:
-        optional_params(KernelType kt) : kType(kt) {}
-        KernelType kType;
-    };
-}
+protected:
+    explicit optional_params(KernelType kt) : kType(kt) {}
+    KernelType kType;
+};
+}  // namespace kernel_selector

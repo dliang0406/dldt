@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -14,11 +14,10 @@
  limitations under the License.
 """
 
-from mo.ops.tile import Tile
-import networkx as nx
 import numpy as np
+
 from mo.back.replacement import BackReplacementPattern
-from mo.graph.graph import unique_id, Node
+from mo.graph.graph import Graph
 
 
 class ShufflenetReLUReorder(BackReplacementPattern):
@@ -27,6 +26,10 @@ class ShufflenetReLUReorder(BackReplacementPattern):
     """
     enabled = False
 
+    def run_before(self):
+        from extensions.back.TransposeToPermute import TransposeToPermute
+        return [TransposeToPermute]
+
     def pattern(self):
         return dict(
             nodes=[
@@ -34,7 +37,7 @@ class ShufflenetReLUReorder(BackReplacementPattern):
                 ('relu_data', dict(kind='data')),
                 ('reshape1', dict(kind='op', type='Reshape')),
                 ('reshape1_data', dict(kind='data')),
-                ('transpose', dict(kind='op', type='Permute')),
+                ('transpose', dict(kind='op', type='Transpose')),
                 ('transpose_data', dict(kind='data')),
                 ('reshape2', dict(kind='op', type='Reshape')),
                 ('reshape2_data', dict(kind='data')),
@@ -48,12 +51,10 @@ class ShufflenetReLUReorder(BackReplacementPattern):
                    ('transpose_data', 'reshape2'),
                    ('reshape2', 'reshape2_data'),
                    ('reshape2_data', 'conv'),
-                   ],
-            node_attrs=['kind', 'type'],
-            edge_attrs=[])
+                   ]
+        )
 
-
-    def replace_pattern(self, graph: nx.MultiDiGraph, match: dict):
+    def replace_pattern(self, graph: Graph, match: dict):
         relu = match['relu']
         reshape1 = match['reshape1']
         reshape2_data = match['reshape2_data']

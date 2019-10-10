@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -14,23 +14,33 @@
  limitations under the License.
 """
 
-import networkx as nx
-
 from mo.front.common.partial_infer.elemental import copy_shape_infer
-from mo.ops.op import Op
+from mo.graph.graph import Node, Graph
+from mo.ops.op import Op, PermuteAttrs
 
 
 class Softmax(Op):
-    op = 'Softmax'
-    enabled = False
+    op = 'SoftMax'
+    enabled = True
 
-    def __init__(self, graph: nx.MultiDiGraph, attrs: dict):
+    def __init__(self, graph: Graph, attrs: dict):
         super().__init__(graph, {
-            'infer': copy_shape_infer,
+            'infer': Softmax.infer,
             'kind': 'op',
+            'axis': 1,
             'type': __class__.op,
             'op': __class__.op,
+            'in_ports_count': 1,
+            'out_ports_count': 1,
         }, attrs)
 
     def supported_attrs(self):
         return ['axis']
+
+    @staticmethod
+    def infer(node: Node):
+        if node.axis < 0:
+            node.axis = len(node.in_node().shape) + node.axis
+        copy_shape_infer(node)
+        PermuteAttrs.create_permute_attrs(node, attrs=[('axis', 'input:0')])
+

@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -14,8 +13,7 @@ using namespace ShapeInfer;
 
 class MockInputController : public InputController {
 public:
-    MockInputController(const std::vector<DataPtr>& dataVec) : InputController(dataVec, {}, {},
-                                                                               std::make_shared<EmptyChecker>()) {}
+    MockInputController(const std::vector<DataPtr>& dataVec) : InputController(dataVec, {}, std::make_shared<EmptyChecker>()) {}
 
     MOCK_METHOD2(setShapeByName, void(
             const SizeVector&, const std::string&));
@@ -24,6 +22,8 @@ public:
             const SizeVector&, size_t index));
 
     MOCK_METHOD1(getShapes, std::vector<SizeVector>(bool));
+
+    MOCK_METHOD1(getBlobs, std::vector<Blob::CPtr>(bool));
 
     MOCK_METHOD0(getIRShapes, std::vector<SizeVector>());
 

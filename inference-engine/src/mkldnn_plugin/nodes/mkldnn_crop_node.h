@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -14,7 +13,7 @@ namespace MKLDNNPlugin {
 
 class MKLDNNCropNode : public MKLDNNNode {
 public:
-    MKLDNNCropNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng);
+    MKLDNNCropNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket);
     ~MKLDNNCropNode() override = default;
 
     void getSupportedDescriptors() override;

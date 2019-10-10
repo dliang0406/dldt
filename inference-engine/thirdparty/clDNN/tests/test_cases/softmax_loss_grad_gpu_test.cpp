@@ -17,13 +17,13 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include <gtest/gtest.h>
-#include "api/CPP/memory.hpp"
-#include <api/CPP/input_layout.hpp>
-#include "api/CPP/softmax_loss_grad.hpp"
-#include <api/CPP/data.hpp>
-#include <api/CPP/topology.hpp>
-#include <api/CPP/network.hpp>
-#include <api/CPP/engine.hpp>
+#include "api/memory.hpp"
+#include <api/input_layout.hpp>
+#include "api/softmax_loss_grad.hpp"
+#include <api/data.hpp>
+#include <api/topology.hpp>
+#include <api/network.hpp>
+#include <api/engine.hpp>
 #include "test_utils/test_utils.h"
 
 using namespace cldnn;
@@ -31,7 +31,7 @@ using namespace tests;
 
 TEST(softmax_loss_grad_f32_fw_gpu, basic1) {
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto input = memory::allocate(engine, { data_types::f32, format::bfyx,{ 2, 1, 4, 1 } });
     auto labels = memory::allocate(engine, { data_types::f32, format::bfyx,{ 2, 1, 1, 1 } });

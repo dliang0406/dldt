@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -17,6 +16,7 @@
 #include <ie_ihetero_plugin.hpp>
 #include "description_buffer.hpp"
 #include "cpp_interfaces/exception2status.hpp"
+#include "cpp_interfaces/base/ie_plugin_base.hpp"
 
 namespace InferenceEngine {
 
@@ -25,8 +25,9 @@ namespace InferenceEngine {
  * @tparam T Minimal CPP implementation of IInferencePlugin (e.g. IInferencePluginInternal)
  * @details can be used to create external wrapper too
  */
+IE_SUPPRESS_DEPRECATED_START
 template<class T>
-class HeteroPluginBase : public IHeteroInferencePlugin {
+class HeteroPluginBase : public IHeteroInferencePlugin, public IInferencePluginAPI {
 protected:
     class VersionStore : public Version {
         std::string _dsc;
@@ -61,6 +62,22 @@ public:
      */
     void GetVersion(const Version *&versionInfo) noexcept override {
         versionInfo = &_version;
+    }
+
+    void SetName(const std::string & pluginName) noexcept override {
+        _impl->SetName(pluginName);
+    }
+
+    std::string GetName() const noexcept override {
+        return _impl->GetName();
+    }
+
+    Parameter GetConfig(const std::string& name, const std::map<std::string, Parameter> & options) const override {
+        return _impl->GetConfig(name, options);
+    }
+
+    Parameter GetMetric(const std::string& name, const std::map<std::string, Parameter> & options) const override {
+        return _impl->GetMetric(name, options);
     }
 
     void SetLogCallback(IErrorListener &listener) noexcept override {
@@ -105,6 +122,11 @@ public:
         TO_STATUS(ret = _impl->ImportNetwork(modelFileName, config));
     }
 
+    void QueryNetwork(const InferenceEngine::ICNNNetwork &network,
+        const std::map<std::string, std::string>& config, InferenceEngine::QueryNetworkResult &res) const noexcept override {
+        TO_STATUSVAR(_impl->QueryNetwork(network, config, res), res.rc, &res.resp);
+    }
+
     void Release() noexcept override {
         delete this;
     }
@@ -120,9 +142,18 @@ public:
         TO_STATUS(_impl->SetAffinity(network, config));
     }
 
+    void SetCore(ICore* core) noexcept override {
+        _impl->SetCore(core);
+    }
+
+    const ICore& GetCore() const override {
+        IE_ASSERT(nullptr != _impl->GetCore());
+        return *_impl->GetCore();
+    }
 
  private:
     ~HeteroPluginBase() = default;
 };
+IE_SUPPRESS_DEPRECATED_END
 
 }  // namespace InferenceEngine

@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -14,50 +14,80 @@
  limitations under the License.
 """
 
-import copy
 import logging as log
 
-import networkx as nx
 import numpy as np
 
+from mo.front.common.layout import get_batch_dim, get_features_dim
+from mo.front.common.partial_infer.utils import assign_dims_to_weights
 from mo.front.extractor import add_attrs_props
 from mo.front.extractor import update_ie_fields
-from mo.graph.graph import Node, unique_id
-from mo.middle.passes.shape import permute_attrs
+from mo.graph.graph import Node, Graph
+from mo.graph.port import Port
+from mo.middle.passes.fusing.helpers import get_value_id, get_tensor_id, get_tensor_in_port, get_value_in_port
 from mo.middle.pattern_match import apply_pattern
-from mo.middle.passes.fusing.helpers import get_value_id, get_tensor_id
-from mo.ops.op import Op
+from mo.ops.const import Const
+from mo.ops.scale_shift import ScaleShiftOp
 
 
-def pad_op_transform(graph: nx.MultiDiGraph, match: dict):
+def pad_op_transform(graph: Graph, match: dict):
     op = match['op']
     pad_op = match['pad_op']
     input_data = pad_op.in_node(0)
     pads = pad_op.in_node(1).value if len(pad_op.in_nodes()) == 2 else pad_op.pads
+
+    if pad_op.mode != 'constant':
+        log.info('The pad node "{}" with pad mode "{}" cannot be fused.'.format(pad_op.soft_get('name'), pad_op.mode))
+        return
+
+    if pad_op.mode == 'constant' and pad_op.fill_value != 0.0:
+        log.info('The pad node "{}" with non-zero fill value cannot be fused.'.format(pad_op.soft_get('name')))
+        return
+
+    input_tensor_dims = len(match['pad_output'].shape)
+    if np.any(pads[get_features_dim(op.graph.graph['layout'], input_tensor_dims)] != 0) or \
+            np.any(pads[get_batch_dim(op.graph.graph['layout'], input_tensor_dims)] != 0):
+        log.info('The pad node "{}" with padding over feature/batch dimension cannot be fused.'.format(
+            pad_op.soft_get('name')))
+        return
+
     op.pad += pads
     op.pad_spatial_shape = op.pad[op.spatial_dims]
     op['auto_pad'] = None
+    if op.type == 'Pooling':
+        op['exclude_pad'] = False
     assert (graph[match['pad_output'].node][match['op'].node][0]['in'] == 0)
-    graph.remove_edge(match['pad_output'].node, match['op'].node)
-    graph.add_edge(input_data.node, match['op'].node, **{'in': 0})
+    edge_attrs = graph.get_edge_data(match['pad_output'].id, match['op'].id)[0]
+    graph.remove_edge(match['pad_output'].id, match['op'].id)
+    graph.add_edge(input_data.id, match['op'].id, **{'in': 0, **edge_attrs})
 
 
-def fuse_pad(graph: nx.MultiDiGraph):
-    for op_name in ['Conv2D', 'AvgPool', 'AveragePool', 'MaxPool', 'DepthwiseConv2dNative']:
+def fuse_pad(graph: Graph):
+    for op_type in ['Convolution', 'Pooling', 'Deconvolution']:
         apply_pattern(
             graph,
             nodes=[
                 ('pad_op', dict(kind='op', op='Pad')),
                 ('pad_output', dict(kind='data')),
-                ('op', dict(kind='op', op=op_name))],
+                ('op', dict(kind='op', type=op_type))],
             edges=[('pad_op', 'pad_output'),
                    ('pad_output', 'op', {'in': 0})],
-            action=pad_op_transform,
-            node_attrs=['kind', 'op'],
-            edge_attrs=['in'])
+            action=pad_op_transform
+        )
 
 
-def matmul_to_fully_connected_action(graph: nx.MultiDiGraph, match: dict):
+def convert_matmul_to_fully_connected(graph: Graph):
+    apply_pattern(
+        graph,
+        nodes=[
+            ('matmul', dict(kind='op', op='MatMul')),
+            ('output', dict(kind='data'))],
+        edges=[('matmul', 'output')],
+        action=matmul_to_fully_connected_action
+    )
+
+
+def matmul_to_fully_connected_action(graph: Graph, match: dict):
     log.debug('fully_connected_matched')
     matmul = match['matmul']
     input = matmul.in_node(0)
@@ -73,101 +103,36 @@ def matmul_to_fully_connected_action(graph: nx.MultiDiGraph, match: dict):
             weights.shape is not None and
             len(weights.shape) == 2 and
             len(weights_consumers) >= 1):
+        matmul['can_be_fused'] = False
         return
 
     matmul['out-size'] = matmul.out_node().shape[-1]
-    matmul['type'] = 'FullyConnected'
+    if graph.graph['cmd_params'].generate_experimental_IR_V10:
+        matmul['type'] = 'MatMul'
+    else:
+        matmul['type'] = 'FullyConnected'
+        matmul.in_edge(1)['bin'] = 'weights'
     matmul['channel_dims'] = len(match['output'].shape) - 1
     matmul['bias_addable'] = True
     matmul['input_channel_dim'] = 0  # MatMul weights in IO
     matmul['output_channel_dim'] = 1
     matmul['layout'] = 'NHWC'
+
+    assign_dims_to_weights(matmul.in_node(1), None, matmul.input_channel_dim, matmul.output_channel_dim, 2)
     # Do not transpose weights in this pass, it will be done as a separate pass
 
 
-def transpose_fully_connected_weights(graph: nx.MultiDiGraph):
-    transposed_for_IE = 'transposed_for_IE'
-    for node in graph.nodes():
-        node = Node(graph, node)
-        if node.has_valid('type') and node.type == 'FullyConnected':
-            weights = node.in_node(1)
-            node.in_edge(1)['bin'] = 'weights'
-            if weights.has_and_set(transposed_for_IE):
-                continue
-            # IE accepts weights for fully-connected in OI, but MatMul is in IO, transpose
-            weights.value = np.transpose(weights.value)
-            weights[transposed_for_IE] = True
-            log.debug("Transposed weights {} for FC node {}; weights.shape = {}".format(weights.name, node.name, weights.shape))
-            weights.shape = np.array(weights.value.shape)
-
-
-def convert_matmul_to_fully_connected(graph: nx.MultiDiGraph):
-    apply_pattern(
-        graph,
-        nodes=[
-            ('matmul', dict(kind='op', op='MatMul')),
-            ('output', dict(kind='data'))],
-        edges=[('matmul', 'output')],
-        action=matmul_to_fully_connected_action,
-        node_attrs=['kind', 'op'],
-        edge_attrs=[])
-
-
-def gemm_to_fully_connected_action(graph: nx.MultiDiGraph, match: dict):
-    log.debug('gemm_to_fully_connected_action is triggered')
-    gemm = match['gemm']
-    A = gemm.in_node(0)
-    B = gemm.in_node(1)
-    B_consumers = graph.out_edges(B.node)
-    C = gemm.in_node(2)
-    C_consumers = graph.out_edges(C.node)
-
-    if not (B.value is not None and
-            C.value is not None and
-            A.shape is not None and
-            C.shape.size == 1 and
-            not gemm.transpose_a and
-            (len(B_consumers) == 1 or not gemm.transpose_b)):
-        log.warning('Cannot convert Gemm to FullyConnected')
-        return
-
-    if gemm.transpose_b:
-        #B.value = B.value.transpose()
-        #B.shape = np.array(B.value.shape, dtype=np.int64)
-        gemm.transpose_b = 0
-    else:
-        B.value = B.value.transpose()
-        B.shape = np.array(B.value.shape, dtype=np.int64)
-        
-
-    gemm['out-size'] = gemm.out_node().shape[-1]
-    gemm['type'] = 'FullyConnected'
-    gemm['channel_dims'] = len(match['output'].shape) - 1
-    gemm['bias_addable'] = True
-    gemm['input_channel_dim'] = 0  # MatMul weights in IO
-    gemm['output_channel_dim'] = 1
-    gemm['layout'] = 'NHWC'
-    gemm.in_edge(1)['bin'] = 'weights'
-    gemm.in_edge(2)['bin'] = 'biases'
-    # Do not transpose weights in this pass, it will be done as a separate pass
-
-
-def convert_gemm_to_fully_connected(graph: nx.MultiDiGraph):
-    apply_pattern(
-        graph,
-        nodes=[
-            ('gemm', dict(kind='op', op='Gemm')),
-            ('output', dict(kind='data'))],
-        edges=[('gemm', 'output')],
-        action=gemm_to_fully_connected_action,
-        node_attrs=['kind', 'op'],
-        edge_attrs=[])
-
-
-def muladd_to_scaleshift_action(graph: nx.MultiDiGraph, match: dict):
+def muladd_to_scaleshift_action(graph: Graph, match: dict):
     mul = match['mul']
     add = match['add']
     output = match['output']
+
+    # Pass works correctly only in case when node have only 1 output
+    if len(mul.out_port(0).get_destinations()) > 1:
+        return
+
+    if mul.soft_get('can_be_scaleshift') is False or add.soft_get('can_be_scaleshift') is False:
+        return
 
     mul_weights_id = get_value_id(mul)
     mul_input_id = get_tensor_id(mul)
@@ -189,65 +154,65 @@ def muladd_to_scaleshift_action(graph: nx.MultiDiGraph, match: dict):
 
     # Transform values
     weights.value = np.squeeze(weights.value)
-    weights.shape = weights.value.shape
+    weights.shape = np.array(weights.value.shape, dtype=np.int64)
 
     bias.value = np.squeeze(bias.value)
-    bias.shape = bias.value.shape
+    bias.shape = np.array(bias.value.shape, dtype=np.int64)
 
     # Broadcast weights if they are scalar
     if weights.value.ndim == 0 and bias.value.ndim == 1:
         weights.value = np.full(bias.shape, weights.value.item())
-        weights.shape = weights.value.shape
+        weights.shape = np.array(weights.value.shape, dtype=np.int64)
 
     if bias.shape != weights.shape:
         log.warning('Mul->Add to ScaleShift conversion stoped {} != {}'.format(weights.shape, bias.shape))
         return
 
     if bias.value.ndim != weights.value.ndim or bias.value.size != weights.value.size:
-        log.debug(
-            "Skipping Mul->Add to scaleshift or power conversion for nodes {}, {} because of different weights and biases".format(
-                mul.name, add.name))
+        log.debug("Skipping Mul->Add to ScaleShift conversion for nodes {}, {} because of different weights "
+                  "and biases".format(mul.name, add.name))
+        return
+
+    if bias.value.size == 1 and weights.value.size == 1:
+        log.debug("Skipping Mul->Add to ScaleShift conversion for nodes {}, {}. Will be converted to Power"
+                  "".format(mul.name, add.name))
         return
 
     op_name = "ScaleShift"
-    if bias.value.size == 1 and weights.value.size == 1:
-        op_name = "Power"
 
-    log.debug(
-        "Fusing Mul->Add to {}. Input nodes: {} and {}, bias.shape = {}, weights.shape = {}".format(op_name, mul.id,
-                                                                                                           add.id,
-                                                                                                           bias.shape,
-                                                                                                           weights.shape))
+    log.debug("Fusing Mul->Add to {}. Input nodes: {} and {}, bias.shape = {}, weights.shape = {}"
+              "".format(op_name, mul.id, add.id, bias.shape, weights.shape))
 
     graph.remove_edge(input.node, mul.id)
     graph.remove_edge(weights.node, mul.id)
     graph.remove_edge(bias.node, add.id)
     graph.remove_edge(add.node, output.id)
 
-    op_node = unique_id(graph, mul.name + '/Fused{}_'.format(op_name))
-    if op_name == 'ScaleShift':
-        graph.add_node(op_node, **add_attrs_props(dict(kind='op', precision="FP32", type=op_name, name=op_node,
-                                                         op=op_name, data_type=input.data_type)))
-        update_ie_fields(graph.node[op_node])
-        graph.add_edges_from([
-            (input.node, op_node, {'in': 0}),
-            (weights.node, op_node, {'in': 1, 'bin': 'weights'}),
-            (bias.node, op_node, {'in': 2, 'bin': 'biases'}),
-            (op_node, output.node, {'out': 0})
-        ])
-    else:
-        graph.add_node(op_node, **add_attrs_props(dict(kind='op', precision="FP32", type=op_name, name=op_node,
-                                                       op=op_name, data_type=input.data_type, power=1, scale=weights.value.item(), shift=bias.value.item())))
-        update_ie_fields(graph.node[op_node])
-        graph.add_edges_from([
-            (input.node, op_node, {'in': 0}),
-            (op_node, output.node, {'out': 0})
-        ])
+    op_node = graph.unique_id(mul.name + '/Fused{}_'.format(op_name))
+
+    graph.add_node(op_node, **add_attrs_props(dict(kind='op', precision="FP32", type=op_name, name=op_node,
+                                                   op=op_name, data_type=input.data_type)))
+    scsh = Node(graph, op_node)
+    scsh.add_input_port(0)
+    scsh.add_input_port(1)
+    scsh.add_input_port(2)
+    scsh.add_output_port(0)
+
+    update_ie_fields(graph.node[op_node])
+    graph.add_edges_from([
+        (input.node, op_node, {'in': 0}),
+        (weights.node, op_node, {'in': 1, 'bin': 'weights'}),
+        (bias.node, op_node, {'in': 2, 'bin': 'biases'}),
+        (op_node, output.node, {'out': 0})
+    ])
 
     return
 
 
-def convert_muladd_to_scaleshift_or_power(graph: nx.MultiDiGraph):
+def convert_muladd_to_scaleshift(graph: Graph):
+    if hasattr(graph, 'graph') and 'cmd_params' in graph.graph and graph.graph['cmd_params'].generate_experimental_IR_V10:
+        return
+    # TODO nGraph remove BEGIN
     apply_pattern(
         graph,
         nodes=[
@@ -260,20 +225,19 @@ def convert_muladd_to_scaleshift_or_power(graph: nx.MultiDiGraph):
             ('add', dict(kind='op', op='Add'))
         ],
         edges=[
-            ('weights', 'mul', {'in': 0}),
-            ('input', 'mul', {'in': 1}),
+            ('weights', 'mul'),
+            ('input', 'mul'),
             ('mul', 'mout'),
-            ('mout', 'add', {'in': 0}),
-            ('bias', 'add', {'in': 1}),
+            ('mout', 'add'),
+            ('bias', 'add'),
             ('add', 'output'),
         ],
-        action=muladd_to_scaleshift_action,
-        node_attrs=['kind', 'op'],
-        edge_attrs=['in'],
+        action=muladd_to_scaleshift_action
     )
+    # TODO nGraph remove END
 
 
-def batch_norm_fuse_action(graph: nx.MultiDiGraph, match: dict):
+def batch_norm_fuse_action(graph: Graph, match: dict):
     """
     Multiply convolution kernel by batch normalization coefficient and remove mul op.
     """
@@ -287,11 +251,11 @@ def batch_norm_fuse_action(graph: nx.MultiDiGraph, match: dict):
     match['kernel'].value = match['kernel'].value * match['norm'].value
     graph.remove_edge(match['conv_output'].node, match['mul'].node)
     graph.remove_edge(match['mul'].node, match['mul_output'].node)
-    # graph.remove_node(match['mul'].node)    # if we remove a node, next iteration over isomorphisms gives an error
+    # graph.remove_node(match['mul'].node)  # if we remove a node, next iteration over isomorphisms gives an error
     graph.add_edge(match['conv'].node, match['mul_output'].node, out=0)
 
 
-def batch_norm_fuse(graph: nx.MultiDiGraph):
+def batch_norm_fuse(graph: Graph):
     apply_pattern(
         graph,
         nodes=[
@@ -307,362 +271,57 @@ def batch_norm_fuse(graph: nx.MultiDiGraph):
             ('conv_output', 'mul', {'in': 0}),  # TODO get rid of explicit input port number, mul is a commutative op
             ('norm', 'mul', {'in': 1}),  # TODO get rig of explicit input port number, mul is a commutative op
             ('mul', 'mul_output')],
-        action=batch_norm_fuse_action,
-        node_attrs=['kind', 'op'],
-        edge_attrs=['in'])
+        action=batch_norm_fuse_action
+    )
     return graph
 
 
-def bias_action(graph: nx.MultiDiGraph, match: dict):
-    if not match['conv'].has_and_set('bias_addable') or not match['bias_add'].has_and_set('can_be_bias'):
-        log.warning('False application of bias_action')
+def convert_add_or_mul_to_scaleshift(graph: Graph):
+    if graph.graph['cmd_params'].generate_experimental_IR_V10:
         return
+    graph.strict_mode = False
+    for node in graph.get_op_nodes():
+        if node.soft_get('op') in ['Add', 'Mul'] and len(node.in_ports()) == 2:
 
-    if match['bias'].value is None or match['bias'].shape is None:
-        return
-    if match['conv_output'].shape is None or match['bias'].shape != match['conv_output'].shape[
-        match['conv'].channel_dims]:  # TODO check bounds in sub-array access
-        return
-    assert (len(match['conv'].in_nodes()) == 2)
-    if len(graph.out_edges(match['conv_output'].node)) > 1 or len(graph.out_edges(match['bias'].node)) > 1:
-        return
-    graph.remove_edges_from([
-        (match['conv'].node, match['conv_output'].node),
-        (match['bias_add'].node, match['bias_add_output'].node),
-        (match['bias'].node, match['bias_add'].node)])
-    graph.add_edges_from([
-        (match['bias'].node, match['conv'].node, {'in': 2, 'bin': 'biases'}),
-        (match['conv'].node, match['bias_add_output'].node, {'out': 0})])
+            tensor_port, value_port = get_tensor_in_port(node), get_value_in_port(node)
 
+            if tensor_port is not None and not tensor_port.disconnected() and value_port is not None and node.soft_get('can_be_scaleshift') is not False:
+                original_value = value_port.data.get_value()
+                if original_value.size == 1:
+                    continue
 
-def convert_bias(graph: nx.MultiDiGraph):
-    apply_pattern(
-        graph,
-        nodes=[
-            ('conv', dict(kind='op', bias_addable=True)),
-            ('conv_output', dict(kind='data')),
-            ('bias', dict(kind='data')),
-            ('bias_add', dict(kind='op', can_be_bias=True)),
-            ('bias_add_output', dict(kind='data'))],
-        edges=[
-            ('conv', 'conv_output'),
-            ('conv_output', 'bias_add'),
-            ('bias', 'bias_add'),
-            ('bias_add', 'bias_add_output')],
-        action=bias_action,
-        node_attrs=['kind', 'bias_addable', 'can_be_bias'],
-        edge_attrs=[])
+                # Remove 1 dims from value array (should be 1D)
+                value_port.data.set_value(np.squeeze(original_value))  # Updated shapes accordingly
 
+                # Create ScaleShift operation
+                scsh_op = ScaleShiftOp(graph, dict(name='ScaleShift/{}'.format(node.name))).create_node()
 
-def convert_add_to_scaleshift(graph: nx.MultiDiGraph):
-    for n in list(graph.nodes()):
-        node = Node(graph, n)
-        if node.has('op') and (node.op == 'BiasAdd' or node.op == 'Add') and len(node.in_nodes()) == 2:
-            tensor_id, value_id = get_tensor_id(node), get_value_id(node)
-            if tensor_id is not None and value_id is not None:
-                node['type'] = 'ScaleShift'
-                node['op'] = 'ScaleShift'
-                node.in_node(value_id).value = np.squeeze(node.in_node(value_id).value)
-                node.in_node(value_id).shape = node.in_node(value_id).value.shape
+                if node.op == 'Mul':
+                    # Create fake biases for scale shift node
+                    const_op = Const(graph, dict(name='{}/biases'.format(scsh_op.name),
+                                                 value=np.zeros(value_port.data.get_shape(), dtype=np.float32),
+                                                 shape=np.array(value_port.data.get_shape()),
+                                                 )).create_node()
 
-                # if the node was created with eltwise then it has attribute 'operation' which should be removed from the IR
-                if node.has('operation'):
-                    del graph.node[n]['operation']
+                    # Reconnect input and weights to scale shift node
+                    tensor_port.get_connection().set_destination(scsh_op.in_port(0))
+                    value_port.get_connection().set_destination(scsh_op.in_port(1))
+                    const_op.out_port(0).connect(scsh_op.in_port(2))
+                else:
+                    # Create fake weights for scale shift node
+                    const_op = Const(graph, dict(name='{}/weights'.format(scsh_op.name),
+                                                 value=np.ones(value_port.data.get_shape(), dtype=np.float32),
+                                                 shape=np.array(value_port.data.get_shape()),
+                                                 )).create_node()
 
-                bias_data = node.in_node(value_id)
-                graph[bias_data.node][node.node][0]['in'] = 2
-                graph[bias_data.node][node.node][0]['bin'] = 'biases'
+                    # Reconnect input and biases to scale shift node
+                    tensor_port.get_connection().set_destination(scsh_op.in_port(0))
+                    const_op.out_port(0).connect(scsh_op.in_port(1))
+                    value_port.get_connection().set_destination(scsh_op.in_port(2))
 
-                update_ie_fields(graph.node[node.id])
+                node.out_port(0).get_connection().set_source(scsh_op.out_port(0))
 
-                weights_id = unique_id(graph, 'weights_')
-                graph.add_node(weights_id, **add_attrs_props(
-                    dict(kind='data', precision="FP32", name=weights_id, value=None, shape=None, data_type=None,
-                         infer=None)))
-                wnode = Node(graph, weights_id)
-
-                wnode['value'] = np.full_like(bias_data.value, 1, dtype=np.float32)
-                wnode['shape'] = np.array(wnode['value'].shape)
-
-                graph.add_edges_from([
-                    (weights_id, node.node, {'in': 1, 'bin': 'weights'}),
-                ])
-
-
-def convert_mul_to_scaleshift(graph: nx.MultiDiGraph):
-    for n in list(graph.nodes()):
-        node = Node(graph, n)
-        if node.has('op') and node.op == 'Mul' and len(node.in_nodes()) == 2:
-            tensor_id, value_id = get_tensor_id(node), get_value_id(node)
-            if tensor_id is not None and value_id is not None:
-                node['type'] = 'ScaleShift'
-                node['op'] = 'ScaleShift'
-                node.in_node(value_id).value = np.squeeze(node.in_node(value_id).value)
-                node.in_node(value_id).shape = node.in_node(value_id).value.shape
-
-                # if the node was created with eltwise then it has attribute 'operation' which should be removed from the IR
-                if node.has('operation'):
-                    del graph.node[n]['operation']
-
-                scale_data = node.in_node(value_id)
-                graph[scale_data.node][node.node][0]['in'] = 1
-                graph[scale_data.node][node.node][0]['bin'] = 'weights'
-
-                update_ie_fields(graph.node[node.id])
-
-                bias_id = unique_id(graph, 'bias_')
-                graph.add_node(bias_id, **add_attrs_props(
-                    dict(kind='data', precision="FP32", name=bias_id, value=None, shape=None, data_type=None, infer=None)))
-                wnode = Node(graph, bias_id)
-
-                wnode['value'] = np.full_like(scale_data.value, 0, dtype=np.float32)
-                wnode['shape'] = np.array(wnode['value'].shape)
-
-                graph.add_edges_from([
-                    (bias_id, node.node, {'in': 2, 'bin': 'biases'}),
-                ])
-
-
-def convert_nasnet_action(graph: nx.MultiDiGraph, matches: dict):
-    """
-    This function converts speciefic for NasNet topology subgraph Pad->StridedSlice->AvgPool to Conv->Crop->AvgPool
-    """
-    input = matches['input']
-    output = matches['output']
-
-    pad_op = matches['pad_op']
-    pad_const = matches['pad_const']
-    pad_out = matches['pad_out']
-
-    sslice = matches['sslice']
-    begin = matches['begin']
-    end = matches['end']
-    stride = matches['stride']
-    sslice_out = matches['sslice_out']
-
-    avg_pool = matches['avg_pool']
-
-    if not np.array_equal(pad_const.value, np.array([[0, 0], [0, 1], [0, 1], [0, 0]])):
-        log.error(" Pad values doesn't match!")
-        return
-
-    if not np.array_equal(begin.value, np.array([0, 1, 1, 0])):
-        log.error("StridedSlice has wron begin")
-        return
-
-    if sslice.end_mask != 15 or sslice.begin_mask != 9:
-        log.error("StridedSlice has wrong masks")
-        return
-
-    # Cut Smth-x->Pad->StrudedSlice-x->AvgPool
-    graph.remove_edge(input.id, pad_op.id)
-    graph.remove_edge(sslice.id, sslice_out.id)
-
-    # Pad -> Conv
-    conv_node = unique_id(graph, pad_op.name + '/Conv_')
-    conv_weights_node = unique_id(graph, pad_op.name + '/ConvW_')
-    conv_weights = np.ones((1, 1, input.shape[3], 1))
-    conv_output = unique_id(graph, pad_op.name + '/ConvOut_')
-    output_shape = np.array([input.shape[0], input.shape[1] + 1, input.shape[2] + 1, input.shape[3]])
-
-    graph.add_node(conv_node,
-                   **add_attrs_props(dict(kind='op', precision="FP32", type='Convolution', name=conv_node, op='Conv2D',
-                                          stride=np.array([1, 1, 1, 1]), dilation=np.array([1, 1, 1, 1]),
-                                          group=input.shape[3], bias_addable=True, bias_term=False, spatial_dims=np.array([1, 2]),
-                                          pad=np.array([[0, 0], [0, 0], [0, 0], [0, 0]]), output_shape=output_shape,
-                                          channel_dims=np.array([3]))))
-
-    graph.add_node(conv_weights_node, **add_attrs_props(
-        dict(kind='data', precision="FP32", name=conv_weights_node, value=np.array(conv_weights),
-             shape=np.array(conv_weights.shape),
-             data_type=input.data_type, infer=None,
-             spatial_dims=np.array([0, 1]),
-             input_channel_dim=np.array([2]),
-             output_channel_dim=np.array([3]),
-             dims_number=np.array([4]), can_be_bias=True)))
-    graph.add_node(conv_output, **add_attrs_props(
-        dict(kind='data', precision="FP32", name=conv_output, value=None, shape=output_shape,
-             data_type=input.data_type)))
-
-    # StridedSlice -> Crop
-    Crop = Op.get_op_class_by_name('Crop')
-    crop = Crop(graph, dict(name=sslice.name + '/Crop_', axis=np.array([1, 2]),
-                            dim=np.array([output_shape[1] - 1, output_shape[2] - 1]), offset=np.array([1, 1])))
-    crop.create_node_with_data([Node(graph, conv_output)], data_nodes=sslice_out)
-    # graph.add_node(crop_node, **add_attrs_props(dict(kind='op', precision="FP32", type='Crop', name=crop_node,
-    #                                                 op='Crop', axis=[1,2], dim=[output_shape[1]-1, output_shape[2]-1], offset=[1,1])))
-
-    # Connect : Conv->Crop->AvgPool
-    graph.add_edges_from([
-        (input.id, conv_node, {'in': 0}),
-        (conv_weights_node, conv_node, {'in': 1, 'bin': 'weights'}),
-        (conv_node, conv_output, {'out': 0}),
-    ])
-    update_ie_fields(graph.node[conv_node])
-
-
-def convert_nasnet(graph: nx.MultiDiGraph):
-    apply_pattern(
-        graph,
-        nodes=[
-            ('input', dict(kind='data')),
-            ('pad_const', dict(kind='data')),
-            ('pad_op', dict(kind='op', op='Pad')),
-            ('pad_out', dict(kind='data')),
-
-            ('begin', dict(kind='data')),
-            ('end', dict(kind='data')),
-            ('stride', dict(kind='data')),
-            ('sslice', dict(kind='op', op='StridedSlice')),
-            ('sslice_out', dict(kind='data')),
-
-            ('avg_pool', dict(kind='op', op='AvgPool')),
-            ('output', dict(kind='data')),
-        ],
-        edges=[
-            ('input', 'pad_op', {'in': 0}),
-            ('pad_const', 'pad_op', {'in': 1}),
-            ('pad_op', 'pad_out'),
-
-            ('pad_out', 'sslice', {'in': 0}),
-            ('begin', 'sslice', {'in': 1}),
-            ('end', 'sslice', {'in': 2}),
-            ('stride', 'sslice', {'in': 3}),
-            ('sslice', 'sslice_out'),
-
-            ('sslice_out', 'avg_pool', {'in': 0}),
-            ('avg_pool', 'output')
-        ],
-        action=convert_nasnet_action,
-        node_attrs=['kind', 'op'],
-        edge_attrs=['in'])
-    return graph
-
-
-def convert_weights_layout(graph: nx.MultiDiGraph, perm: np.ndarray, inv: np.ndarray, op: str):
-    for node in graph.nodes():
-        node = Node(graph, node)
-        if node.kind == 'op' and node.op == op:
-            weights = node.in_node(1)  # TODO hard-coded 1 as weights
-            if weights.value is not None and np.all(weights.spatial_dims == np.array([0, 1])):
-                log.debug('convert_weights_layout for {}'.format(node.name))
-                weights.value = np.array(weights.value.transpose(perm))
-                permute_attrs(weights.graph.node[weights.id], perm, inv)
-                weights['nchw_layout'] = True
-
-
-def convert_weights_yxio_to_oiyx(graph: nx.MultiDiGraph):
-    perm = np.array([3, 2, 0, 1])
-    inv = np.array([2, 3, 1, 0], dtype=np.int64)
-    log.debug('convert_weights_yxio_to_oiyx')
-    convert_weights_layout(graph, perm, inv, 'Conv2D')
-    convert_weights_layout(graph, perm, inv, 'Deconv2D')
-
-
-def convert_weights_yxio_to_goiyx(graph: nx.MultiDiGraph):
-    perm = np.array([2, 3, 0, 1])
-    inv = np.array([2, 3, 0, 1], dtype=np.int64)
-    log.debug('convert_weights_yxio_to_goiyx')
-    convert_weights_layout(graph, perm, inv, 'DepthwiseConv2dNative')
-
-
-def dilated_convolution_action(graph: nx.MultiDiGraph, match: dict):
-    conv = match['conv']
-    stb = match['space_to_batch']
-    bts = match['batch_to_space']
-
-    block_size = match['stb_bs']
-
-    input = match['input']
-    output = match['output']
-    stb_out = match['stb_output']
-    conv_out = match['conv_output']
-
-    graph.remove_edge(input.id, stb.id)
-    graph.remove_edge(stb_out.id, conv.id)
-    graph.remove_edge(conv.id, conv_out.id)
-    graph.remove_edge(bts.id, output.id)
-
-    conv.dilation[2] = block_size.value[0]
-    conv.dilation[3] = block_size.value[1]
-
-    pad = match['stb_pad'].value - match['bts_crop'].value
-    conv.pad[conv.spatial_dims] = [pad[0][0], pad[0][1]], [pad[1][0], pad[1][1]]
-    conv['auto_pad'] = None
-
-    graph.add_edges_from([
-        (input.id, conv.id, {'in': 0}),
-        (conv.id, output.id, {'out': 0}),
-    ])
-
-
-def convert_dilated_convolution(graph: nx.MultiDiGraph):
-    for op in ['Conv2D', 'DepthwiseConv2dNative']:
-        apply_pattern(
-            graph,
-            nodes=[
-                ('conv', dict(kind='op', op=op)),
-                ('space_to_batch', dict(kind='op', op='SpaceToBatchND')),
-                ('batch_to_space', dict(kind='op', op='BatchToSpaceND')),
-                ('input', dict(kind='data')),
-                ('output', dict(kind='data')),
-                ('conv_output', dict(kind='data')),
-                ('stb_output', dict(kind='data')),
-                ('stb_bs', dict(kind='data')),
-                ('stb_pad', dict(kind='data')),
-                ('bts_bs', dict(kind='data')),
-                ('bts_crop', dict(kind='data'))
-            ],
-            edges=[
-                ('input', 'space_to_batch', {'in': 0}),
-                ('stb_bs', 'space_to_batch', {'in': 1}),
-                ('stb_pad', 'space_to_batch', {'in': 2}),
-                ('space_to_batch', 'stb_output', {'out': 0}),
-                ('stb_output', 'conv', {'in': 0}),
-                ('conv', 'conv_output', {'out': 0}),
-                ('conv_output', 'batch_to_space', {'in': 0}),
-                ('bts_bs', 'batch_to_space', {'in': 1}),
-                ('bts_crop', 'batch_to_space', {'in': 2}),
-                ('batch_to_space', 'output', {'out': 0}),
-            ],
-            action=dilated_convolution_action,
-            node_attrs=['kind', 'op'],
-            edge_attrs=['in'])
-
-
-def convert_multi_input_conv(graph: nx.MultiDiGraph):
-    for node in list(graph.nodes()):
-        node = Node(graph, node)
-        if node.kind == 'op' and node.op == 'ConvND':
-            node.op = 'Conv2D'
-            if node.bias_term == True:
-                num_inputs = len(node.in_nodes()) - 2
-                w_node = node.in_node(len(node.in_nodes()) - 2)
-                b_node = node.in_node(len(node.in_nodes()) - 1)
-            else:
-                num_inputs = len(node.in_nodes()) - 1
-                w_node = node.in_node(len(node.in_nodes()) - 1)
-
-            for i in range(0, num_inputs - 1):
-                in_i = node.in_node(i)
-                out_i = node.out_node(i)
-                conv_id = unique_id(graph, node.id + '__')
-                graph.add_node(conv_id, **copy.deepcopy(node.get_attrs()))
-                new_conv = Node(graph, conv_id)
-                new_conv.name = conv_id
-
-                graph.remove_edge(in_i.id, node.id)
-                graph.remove_edge(node.id, out_i.id)
-                graph.add_edges_from([
-                    (w_node.id, conv_id, {'in': 1, 'bin': 'weights'}),
-                ])
-
-                if node.bias_term == True:
-                    graph.add_edges_from([
-                        (b_node.id, conv_id, {'in': 2, 'bin': 'biases'}),
-                    ])
-
-                graph.add_edges_from([
-                    (in_i.id, conv_id, {'in': 0}),
-                ])
-                graph.add_edge(conv_id, out_i.id, out=3)
+                # Set bin attribute to ScaleShift input ports
+                scsh_op.in_port(1).bin = 'weights'
+                scsh_op.in_port(2).bin = 'biases'
+    graph.strict_mode = True

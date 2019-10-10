@@ -1,5 +1,5 @@
 """
- Copyright (c) 2017-2018 Intel Corporation
+ Copyright (c) 2017-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -14,14 +14,12 @@
  limitations under the License.
 """
 
-import networkx as nx
-from mo.front.mxnet.extractors.utils import get_json_layer_attrs
 from mo.front.common.replacement import FrontReplacementSubgraph
-from mo.middle.passes.eliminate import remove_node_from_graph
+from mo.front.mxnet.extractors.utils import get_json_layer_attrs
+from mo.graph.graph import Graph
 
 
 class SsdPatternRemoveReshape(FrontReplacementSubgraph):
-
     enabled = True
 
     def pattern(self):
@@ -34,26 +32,28 @@ class SsdPatternRemoveReshape(FrontReplacementSubgraph):
             edges=[
                 ('multi_box_prior', 'concat', {'in': 0}),
                 ('concat', 'reshape', {'in': 0})
-            ],
-            node_attrs=['op'],
-            edge_attrs=['in'])
+            ]
+        )
 
-    def replace_sub_graph(self, graph: nx.MultiDiGraph, match: dict):
+    def replace_sub_graph(self, graph: Graph, match: dict):
         """
         Need to find each occurrence of pattern: _contrib_MultiBoxPrior(s) -> Concat -> Reshape
         remove Reshape layer - IE does not expect outputs from concatenation of _contrib_MultiBoxPrior to be reshaped
 
         Parameters
         ----------
-        graph : nx.MultiDiGraph
+        graph : Graph
            Graph with loaded model.
          match : dict
            Patterns which were found in graph structure.
         """
-        remove_node_from_graph(graph, match['concat'], match['reshape'])
+        reshape_node = match['reshape']
+        reshape_node.out_port(0).get_connection().set_source(reshape_node.in_port(0).get_connection().get_source())
+        graph.remove_node(reshape_node.id)
 
         # concat should be performed for the third axis
         concat_node = match['concat']
         attr = get_json_layer_attrs(concat_node.graph.node[concat_node.id]['symbol_dict'])
         if 'dim' in attr:
             attr['dim'] = 2
+            concat_node['axis'] = 2

@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 """
 
 import argparse
+import logging as log
 import os
 import re
 import sys
@@ -29,10 +30,23 @@ from mo.utils.error import Error
 from mo.utils.utils import refer_to_faq_msg
 
 
+class DeprecatedStoreTrue(argparse.Action):
+    def __init__(self, nargs=0, **kw):
+        super().__init__(nargs=nargs, **kw)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        dep_msg = "Use of deprecated cli option {} detected. Option use in the following releases will be fatal. ".format(option_string)
+        if 'fusing' in option_string:
+            dep_msg += 'Please use --finegrain_fusing cli option instead'
+        log.error(dep_msg, extra={'is_warning': True})
+        setattr(namespace, self.dest, True)
+
+
 class CanonicalizePathAction(argparse.Action):
     """
     Expand user home directory paths and convert relative-paths to absolute.
     """
+
     def __call__(self, parser, namespace, values, option_string=None):
         if values is not None:
             list_of_values = list()
@@ -52,6 +66,7 @@ class CanonicalizePathCheckExistenceAction(CanonicalizePathAction):
     Expand user home directory paths and convert relative-paths to absolute and check specified file or directory
     existence.
     """
+
     def __call__(self, parser, namespace, values, option_string=None):
         super().__call__(parser, namespace, values, option_string)
         names = getattr(namespace, self.dest)
@@ -140,137 +155,6 @@ def writable_dir(path: str):
             raise Error('The directory "{}" is not writable'.format(cur_path))
 
 
-def get_caffe_legacy_cli_parser(parser: argparse.ArgumentParser = None):
-    if not parser:
-        parser = argparse.ArgumentParser()
-    forever_legacy_group = parser.add_argument_group('Caffe* legacy parameters from Beta2 release ' +
-                                                     'that are no longer supported')
-    forever_legacy_group.add_argument('-ListA',
-                                      action='store_true',
-                                      help='List supported precisions')
-    forever_legacy_group.add_argument('-ListF',
-                                      action='store_true',
-                                      help='List supported frameworks')
-    forever_legacy_group.add_argument('-ListN',
-                                      action='store_true',
-                                      help='List supported classes of topologies')
-    forever_legacy_group.add_argument('-l',
-                                      action='store_true',
-                                      help='Learn network statistics and find the best normalization factor')
-    forever_legacy_group.add_argument('-t',
-                                      help='File name of a training/validation network topology')
-    forever_legacy_group.add_argument('-nl',
-                                      help='Number of learning iterations')
-    forever_legacy_group.add_argument('-v',
-                                      action='store_true',
-                                      help='Validate a normalized network')
-    forever_legacy_group.add_argument('-nv',
-                                      help='Number of validation iterations')
-    forever_legacy_group.add_argument('-dm',
-                                      help='Dump a normalized and converted model to a binary file')
-    forever_legacy_group.add_argument('-dr',
-                                      help='Dump report of Model Optimizer run')
-    forever_legacy_group.add_argument('-q',
-                                      help='Quantization file (used for low precision)')
-    forever_legacy_group.add_argument('-c',
-                                      action='store_true',
-                                      help='Generate OpenVX* code')
-    forever_legacy_group.add_argument('-IRCode',
-                                      action='store_true',
-                                      help='Generate OpenVX* code from IR model')
-    forever_legacy_group.add_argument('-ds',
-                                      help='Dump net statistics into .csv files')
-    forever_legacy_group.add_argument('--hfuse',
-                                      choices=['NONE', 'PARTIAL', 'FULL'],
-                                      default='NONE',
-                                      help='<NONE|PARTIAL|FULL>: enable/disable optimization of the layers' +
-                                           ' horizontal fusion when applicibale ("NONE" to disable. ' +
-                                           '"PARTIAL" to enable only native branches and ' +
-                                           '"FULL" for copy the layer')
-    forever_legacy_group.add_argument('--target',
-                                      choices=['XEON'],
-                                      default='XEON',
-                                      help='Target configuration')
-    forever_legacy_group.add_argument('--network',
-                                      help='Generated network type supported networks: ' +
-                                           '<CLASSIFICATION,LOCALIZATION,SEGMENTATION>')
-    forever_legacy_group.add_argument('--code-cfg',
-                                      help='OpenVX* code generation configuration (DEBUG or RELEASE)')
-    forever_legacy_group.add_argument('-mx',
-                                      help='Enable/disable mixed precision handler in a generated OpenVX* code ' +
-                                           '("0"|"false" to disable. "1"|"true" to enable)')
-
-    common_group = parser.add_argument_group('Caffe*-specific parameters in a format of Beta2 release')
-    # Common parameters
-    common_group.add_argument('--version',
-                              action='store_true',
-                              help='List versions of Model Optimizer for TensorFlow*')
-    common_group.add_argument('-w',
-                              type=readable_file,
-                              help='Path to a binary weights file (.caffemodel) including the file name',
-                              action=CanonicalizePathCheckExistenceAction)
-    common_group.add_argument('-d',
-                              type=readable_file,
-                              help='Path to a model proto file (.prototxt) including the file name',
-                              action=CanonicalizePathCheckExistenceAction)
-    common_group.add_argument('-b',
-                              type=int,
-                              default=1,
-                              help='Batch size. Default value is 1')
-    common_group.add_argument('-f',
-                              type=int,
-                              default=1,
-                              help='Network normalization factor')
-    common_group.add_argument('-p',
-                              choices=['FP32', 'FP16'],
-                              default='FP32',
-                              help='Precision of weights of the generated IR')
-    common_group.add_argument('-i',
-                              action='store_true',
-                              help='Generates IR. Currently does nothing, used for compatibility with the previous version of the Model Optimizer.')
-    common_group.add_argument('-ms',
-                              help='Mean image values in the following format: "-ms x,y,z"')
-    common_group.add_argument('-mf',
-                              type=readable_file,
-                              help='Path to a mean image file (.binaryproto)',
-                              action=CanonicalizePathCheckExistenceAction)
-    common_group.add_argument('-mo',
-                              help='Offsets for the mean image file in the following format: "-mo x,y"')
-    common_group.add_argument('--scale',
-                              type=tuple,
-                              default=(),
-                              help='Scale values per channel in the following format: "--scale x,y,z". Floating point ' +
-                                   'values are also accepted.')
-    # TODO: was it true or false by default?
-    common_group.add_argument('--fuse',
-                              choices=['false', '0', 'true', '1'],
-                              default='false',
-                              help='Enable/disable the layers fusion optimization ("0"|"false" to disable. ' +
-                                   '"1"|"true" to enable)')
-    common_group.add_argument('--framework',
-                              type=str,
-                              choices=['CAFFE'],
-                              default='CAFFE',
-                              help='Name of the framework used to train the input model: <CAFFE>')
-    # TODO: do we want to keep compatibility here and put IR in 'Artifacts/NAME_OF_MODEL/' directory
-    common_group.add_argument('-o',
-                              default=get_absolute_path('.'),
-                              help='Output the directory path. By default, the output directory ' +
-                                   'is set to "Artifacts"',
-                              action=CanonicalizePathAction,
-                              type=writable_dir)
-    common_group.add_argument('-k',
-                              help='Path to the mapping file ("CustomLayersMapping.xml") used for ' +
-                                   'registering custom layers',
-                              action=CanonicalizePathCheckExistenceAction,
-                              type=readable_dir)
-    common_group.add_argument('-*',
-                              action='store_true',
-                              help='Do all of the above. Currently does nothing, used for compatibility with the previous version of the Model Optimizer.')
-
-    return parser
-
-
 def get_common_cli_parser(parser: argparse.ArgumentParser = None):
     if not parser:
         parser = argparse.ArgumentParser()
@@ -293,20 +177,18 @@ def get_common_cli_parser(parser: argparse.ArgumentParser = None):
                               action=CanonicalizePathAction,
                               type=writable_dir)
     common_group.add_argument('--input_shape',
-                              help='Input shape(s) that should be fed to an input node(s) of the model. ' +
-                                   'Shape is defined as a comma-separated list of integer numbers enclosed in parentheses, ' +
-                                   'for example [1,3,227,227] or [1,227,227,3], where the order of dimensions ' +
-                                   'depends on the framework input layout of the model. ' +
-                                   'For example, [N,C,H,W] is used for Caffe* models and [N,H,W,C] for TensorFlow* models. '
-                                   'Model Optimizer performs necessary transformations ' +
-                                   'to convert the shape to the layout required by Inference Engine (N,C,H,W). '
-                                   'Two types of brackets are allowed to enclose the dimensions: [...] or (...). ' +
-                                   'The shape ' +
-                                   'should not contain undefined dimensions (? or -1) and should ' +
-                                   'fit the dimensions defined in the input ' +
-                                   'operation of the graph. If there are multiple inputs in the model, --input_shape ' +
-                                   'should contain definition of shape for each input separated by a comma, for example: ' +
-                                   '[1,3,227,227],[2,4] for a model with two inputs with 4D and 2D shapes.')
+                              help='Input shape(s) that should be fed to an input node(s) of the model. '
+                                   'Shape is defined as a comma-separated list of integer numbers enclosed in '
+                                   'parentheses or square brackets, for example [1,3,227,227] or (1,227,227,3), where '
+                                   'the order of dimensions depends on the framework input layout of the model. '
+                                   'For example, [N,C,H,W] is used for Caffe* models and [N,H,W,C] for TensorFlow* '
+                                   'models. Model Optimizer performs necessary transformations to convert the shape to '
+                                   'the layout required by Inference Engine (N,C,H,W). The shape should not contain '
+                                   'undefined dimensions (? or -1) and should fit the dimensions defined in the input '
+                                   'operation of the graph. If there are multiple inputs in the model, --input_shape '
+                                   'should contain definition of shape for each input separated by a comma, for '
+                                   'example: [1,3,227,227],[2,4] for a model with two inputs with 4D and 2D shapes. '
+                                   'Alternatively, you can specify shapes with the --input option.')
     common_group.add_argument('--scale', '-s',
                               type=float,
                               help='All input values coming from original network inputs will be ' +
@@ -316,11 +198,11 @@ def get_common_cli_parser(parser: argparse.ArgumentParser = None):
                                    'is not applied for any input that does not match with ' +
                                    'the original input of the model.')
     common_group.add_argument('--reverse_input_channels',
-                              help='Switches the input channels order from RGB to BGR (or vice versa). ' +
-                                   'Applied to original inputs of the model when and only when ' +
-                                   'a number of channels equals 3. Applied after application of ' +
-                                   '--mean_values and --scale_values options, so numbers in --mean_values and --scale_values ' +
-                                   'go in the order of channels used in the original model.',
+                              help='Switch the input channels order from RGB to BGR (or vice versa). Applied to '
+                                   'original inputs of the model if and only if a number of channels equals 3. Applied '
+                                   'after application of --mean_values and --scale_values options, so numbers in '
+                                   '--mean_values and --scale_values go in the order of channels used in the original '
+                                   'model.',
                               action='store_true')
     common_group.add_argument('--log_level',
                               help='Logger level',
@@ -328,25 +210,29 @@ def get_common_cli_parser(parser: argparse.ArgumentParser = None):
                                        'DEBUG', 'NOTSET'],
                               default='ERROR')
     common_group.add_argument('--input',
-                              help='The name of the input operation of the given model. ' +
-                                   'Usually this is a name of the ' +
-                                   'input placeholder of the model.')
+                              help='Quoted list of comma-separated input nodes names with shapes ' +
+                                   'and values for freezing. The shape and value are specified as space-separated lists. '+
+                                   'For example, use the following format to set input port 0 ' +
+                                   'of the node `node_name1` with the shape [3 4] as an input node and ' +
+                                   'freeze output port 1 of the node `node_name2` with the value [20 15] ' +
+                                   'and the shape [2]: ' +
+                                   '"0:node_name1[3 4],node_name2:1[2]->[20 15]".')
     common_group.add_argument('--output',
                               help='The name of the output operation of the model. ' +
                                    'For TensorFlow*, do not add :0 to this name.')
     common_group.add_argument('--mean_values', '-ms',
                               help='Mean values to be used for the input image per channel. ' +
                                    'Values to be provided in the (R,G,B) or [R,G,B] format. ' +
-                                   'Can be defined for desired input of the model, e.g.: ' +
-                                   '"--mean_values data[255,255,255],info[255,255,255]"' +
-                                   ' The exact meaning and order ' +
+                                   'Can be defined for desired input of the model, for example: ' +
+                                   '"--mean_values data[255,255,255],info[255,255,255]". ' +
+                                   'The exact meaning and order ' +
                                    'of channels depend on how the original model was trained.',
                               default=())
     common_group.add_argument('--scale_values',
                               help='Scale values to be used for the input image per channel. ' +
-                                   'Values are provided in the (R,G,B) or [R,G,B] format.' +
-                                   'Can be defined for desired input of the model, e.g.: ' +
-                                   '"--scale_values data[255,255,255],info[255,255,255]"' +
+                                   'Values are provided in the (R,G,B) or [R,G,B] format. ' +
+                                   'Can be defined for desired input of the model, for example: ' +
+                                   '"--scale_values data[255,255,255],info[255,255,255]". ' +
                                    'The exact meaning and order ' +
                                    'of channels depend on how the original model was trained.',
                               default=())
@@ -358,16 +244,19 @@ def get_common_cli_parser(parser: argparse.ArgumentParser = None):
                               choices=["FP16", "FP32", "half", "float"],
                               default='float')
     common_group.add_argument('--disable_fusing',
-                              help='Turns off fusing of linear operations to Convolution',
-                              action='store_true')
+                              help='Turn off fusing of linear operations to Convolution',
+                              action=DeprecatedStoreTrue)
     common_group.add_argument('--disable_resnet_optimization',
-                              help='Turns off resnet optimization',
+                              help='Turn off resnet optimization',
                               action='store_true')
     common_group.add_argument('--finegrain_fusing',
                               help='Regex for layers/operations that won\'t be fused. ' +
                                    'Example: --finegrain_fusing Convolution1,.*Scale.*')
     common_group.add_argument('--disable_gfusing',
-                              help='Turns off fusing of grouped convolutions',
+                              help='Turn off fusing of grouped convolutions',
+                              action=DeprecatedStoreTrue)
+    common_group.add_argument('--enable_concat_optimization',
+                              help='Turn on concat optimization',
                               action='store_true')
     common_group.add_argument('--move_to_preprocess',
                               help='Move mean values to IR preprocess section',
@@ -389,14 +278,33 @@ def get_common_cli_parser(parser: argparse.ArgumentParser = None):
                               help="Version of Model Optimizer")
 
     common_group.add_argument('--silent',
-                              help='Prevents any output messages except those that correspond to log level equals'
+                              help='Prevent any output messages except those that correspond to log level equals '
                                    'ERROR, that can be set with the following option: --log_level. '
                                    'By default, log level is already ERROR. ',
                               action='store_true',
                               default=False)
-    common_group.add_argument('--freeze_placeholder_with_value', help='Replace input layer with constant node with '
-                                                                      'provided value, e.g.: node_name->True',
+    common_group.add_argument('--freeze_placeholder_with_value',
+                              help='Replaces input layer with constant node with '
+                                   'provided value, for example: "node_name->True". '
+                                   'It will be DEPRECATED in future releases. '
+                                   'Use --input option to specify a value for freezing.',
                               default=None)
+    common_group.add_argument('--generate_deprecated_IR_V2',
+                              help='Force to generate legacy/deprecated IR V2 to work with previous versions of the'
+                                   ' Inference Engine. The resulting IR may or may not be correctly loaded by'
+                                   ' Inference Engine API (including the most recent and old versions of Inference'
+                                   ' Engine) and provided as a partially-validated backup option for specific'
+                                   ' deployment scenarios. Use it at your own discretion. By default, without this'
+                                   ' option, the Model Optimizer generates IR V3.',
+                              action=DeprecatedStoreTrue)
+    common_group.add_argument('--keep_shape_ops',
+                              help='[ Experimental feature ] Enables `Shape` operation with all children keeping. '
+                                   'This feature makes model reshapable in Inference Engine',
+                              action='store_true', default=False)
+    common_group.add_argument('--steps',
+                              help='Enables model conversion steps display',
+                              action='store_true', default=False)
+
     return parser
 
 
@@ -424,6 +332,7 @@ def get_common_cli_options(model_name):
 def get_caffe_cli_options():
     d = {
         'input_proto': ['- Path to the Input prototxt', lambda x: x],
+        'caffe_parser_path': ['- Path to Python Caffe* parser generated from caffe.proto', lambda x: x],
         'mean_file': ['- Path to a mean file', lambda x: x if x else 'Not specified'],
         'mean_file_offsets': ['- Offsets for a mean file', lambda x: x if x else 'Not specified'],
         'k': '- Path to CustomLayersMapping.xml',
@@ -436,13 +345,13 @@ def get_caffe_cli_options():
 def get_tf_cli_options():
     d = {
         'input_model_is_text': '- Input model in text protobuf format',
-        'offload_unsupported_operations_to_tf': '- Offload unsupported operations',
         'tensorflow_subgraph_patterns': '- Patterns to offload',
         'tensorflow_operation_patterns': '- Operations to offload',
         'tensorflow_custom_operations_config_update': '- Update the configuration file with input/output node names',
         'tensorflow_use_custom_operations_config': '- Use the config file',
         'tensorflow_object_detection_api_pipeline_config': '- Use configuration file used to generate the model with '
                                                            'Object Detection API',
+        'tensorflow_custom_layer_libraries': '- List of shared libraries with TensorFlow custom layers implementation',
         'tensorboard_logdir': '- Path to model dump for TensorBoard'
     }
 
@@ -451,11 +360,11 @@ def get_tf_cli_options():
 
 def get_mxnet_cli_options():
     d = {
-        'input_symbol': ' Deploy-ready symbol file',
+        'input_symbol': '- Deploy-ready symbol file',
         'nd_prefix_name': '- Prefix name for args.nd and argx.nd files',
-        'pretrained_model_name': '- Pretrained model which will be merged with .nd files',
-        'save_params_from_nd': '- Enable save built params file from nd files',
-        'legacy_mxnet_model': '- Load the model trained with MXNet with version lower than 1.0.0'
+        'pretrained_model_name': '- Pretrained model to be merged with the .nd files',
+        'save_params_from_nd': '- Enable saving built parameters file from .nd files',
+        'legacy_mxnet_model': '- Enable MXNet loader for models trained with MXNet version lower than 1.0.0'
     }
 
     return OrderedDict(sorted(d.items(), key=lambda t: t[0]))
@@ -463,8 +372,9 @@ def get_mxnet_cli_options():
 
 def get_kaldi_cli_options():
     d = {
-        'counts': '- Path to the counts file',
-        'remove_output_softmax': '- Removes the Softmax layer that is the output layer'
+        'counts': '- A file name with full path to the counts file',
+        'remove_output_softmax': '- Removes the SoftMax layer that is the output layer',
+        'remove_memory': '- Removes the Memory layer and use additional inputs and outputs instead'
     }
 
     return OrderedDict(sorted(d.items(), key=lambda t: t[0]))
@@ -496,6 +406,11 @@ def get_caffe_cli_parser(parser: argparse.ArgumentParser = None):
                                   'and layer attributes',
                              type=str,
                              action=CanonicalizePathCheckExistenceAction)
+    caffe_group.add_argument('--caffe_parser_path',
+                             help='Path to Python Caffe* parser generated from caffe.proto',
+                             type=str,
+                             default=os.path.join(os.path.dirname(sys.argv[0]), 'mo', 'front', 'caffe', 'proto'),
+                             action=CanonicalizePathCheckExistenceAction)
     caffe_group.add_argument('-k',
                              help='Path to CustomLayersMapping.xml to register custom layers',
                              type=str,
@@ -504,7 +419,7 @@ def get_caffe_cli_parser(parser: argparse.ArgumentParser = None):
                              action=CanonicalizePathCheckExistenceAction)
     caffe_group.add_argument('--mean_file', '-mf',
                              help='Mean image to be used for the input. Should be a binaryproto file',
-                             default="",
+                             default=None,
                              action=CanonicalizePathCheckExistenceAction)
     caffe_group.add_argument('--mean_file_offsets', '-mo',
                              help='Mean image offsets to be used for the input binaryproto file. ' +
@@ -543,25 +458,22 @@ def get_tf_cli_parser(parser: argparse.ArgumentParser = None):
 
     tf_group = parser.add_argument_group('TensorFlow*-specific parameters')
     tf_group.add_argument('--input_model_is_text',
-                          help='TensorFlow*: treat the input model file in a text protobuf format ' +
-                               'instead of ' +
-                               'binary, which is default.',
+                          help='TensorFlow*: treat the input model file as a text protobuf format. If not specified, ' +
+                               'the Model Optimizer treats it as a binary file by default.',
                           action='store_true')
-    tf_group.add_argument('--input_checkpoint', type=str, default="", help="TensorFlow*: variables file to load.",
+    tf_group.add_argument('--input_checkpoint', type=str, default=None, help="TensorFlow*: variables file to load.",
                           action=CanonicalizePathCheckExistenceAction)
     tf_group.add_argument('--input_meta_graph',
-                          help='Tensorflow*: a file with a non-trained model before freezing',
+                          help='Tensorflow*: a file with a meta-graph of the model before freezing',
                           action=CanonicalizePathCheckExistenceAction,
                           type=readable_file)
-    tf_group.add_argument('--saved_model_dir', default=None, help="TensorFlow*: directory representing non frozen model",
+    tf_group.add_argument('--saved_model_dir', default=None,
+                          help="TensorFlow*: directory representing non frozen model",
                           action=CanonicalizePathCheckExistenceAction,
                           type=readable_dirs)
     tf_group.add_argument('--saved_model_tags', type=str, default=None,
                           help="Group of tag(s) of the MetaGraphDef to load, in string format, separated by ','. "
                                "For tag-set contains multiple tags, all tags must be passed in.")
-    tf_group.add_argument('--offload_unsupported_operations_to_tf',
-                          help='TensorFlow*: automatically offload unsupported operations to TensorFlow*',
-                          action='store_true')
     tf_group.add_argument('--tensorflow_subgraph_patterns',
                           help='TensorFlow*: a list of comma separated patterns that will be applied to ' +
                                'TensorFlow* node names to ' +
@@ -585,6 +497,14 @@ def get_tf_cli_parser(parser: argparse.ArgumentParser = None):
                           help='TensorFlow*: dump the input graph to a given directory that should be used with TensorBoard.',
                           default=None,
                           action=CanonicalizePathCheckExistenceAction)
+    tf_group.add_argument('--tensorflow_custom_layer_libraries',
+                          help='TensorFlow*: comma separated list of shared libraries with TensorFlow* custom '
+                               'operations implementation.',
+                          default=None,
+                          action=CanonicalizePathCheckExistenceAction)
+    tf_group.add_argument('--disable_nhwc_to_nchw',
+                          help='Disables default translation from NHWC to NCHW',
+                          action='store_true')
     return parser
 
 
@@ -604,21 +524,26 @@ def get_mxnet_cli_parser(parser: argparse.ArgumentParser = None):
 
     mx_group.add_argument('--input_symbol',
                           help='Symbol file (for example, model-symbol.json) that contains a topology structure ' +
-                                  'and layer attributes',
+                               'and layer attributes',
                           type=str,
                           action=CanonicalizePathCheckExistenceAction)
     mx_group.add_argument("--nd_prefix_name",
                           help="Prefix name for args.nd and argx.nd files.",
-                          default="")
+                          default=None)
     mx_group.add_argument("--pretrained_model_name",
-                          help="Pretrained model without extension and epoch number which will be merged with args.nd and argx.nd files.",
-                          default="")
+                          help="Name of a pretrained MXNet model without extension and epoch number. This model will be merged with args.nd and argx.nd files",
+                          default=None)
     mx_group.add_argument("--save_params_from_nd",
                           action='store_true',
-                          help="Enable save built params file from nd files.")
+                          help="Enable saving built parameters file from .nd files")
     mx_group.add_argument("--legacy_mxnet_model",
                           action='store_true',
-                          help="Load the model trained with less version of MXNet than 1.0.0")
+                          help="Enable MXNet loader to make a model compatible with the latest MXNet version. Use only if your model was trained with MXNet version lower than 1.0.0")
+    mx_group.add_argument("--enable_ssd_gluoncv",
+                          action='store_true',
+                          help="Enable pattern matchers replacers for converting gluoncv ssd topologies.",
+                          default=False)
+
     return parser
 
 
@@ -634,16 +559,21 @@ def get_kaldi_cli_parser(parser: argparse.ArgumentParser = None):
         parser = argparse.ArgumentParser()
         get_common_cli_parser(parser=parser)
 
-    mx_group = parser.add_argument_group('Kaldi-specific parameters')
+    kaldi_group = parser.add_argument_group('Kaldi-specific parameters')
 
-    mx_group.add_argument("--counts",
-                          help="Path to the counts file",
-                          default="",
-                          action=CanonicalizePathCheckExistenceAction)
+    kaldi_group.add_argument("--counts",
+                             help="Path to the counts file",
+                             default=None,
+                             action=CanonicalizePathCheckExistenceAction)
 
-    mx_group.add_argument("--remove_output_softmax",
-                          help="Removes the Softmax layer that is the output layer",
-                          action='store_true')
+    kaldi_group.add_argument("--remove_output_softmax",
+                             help="Removes the SoftMax layer that is the output layer",
+                             action='store_true')
+
+    kaldi_group.add_argument("--remove_memory",
+                             help="Removes the Memory layer and use additional inputs outputs instead",
+                             action='store_true',
+                             default=False)
     return parser
 
 
@@ -690,15 +620,129 @@ def get_all_cli_parser():
     return parser
 
 
-def get_placeholder_shapes(argv_input: str, argv_input_shape: str, argv_batch=None):
+def append_exp_keys_to_namespace(argv: argparse.Namespace):
+    setattr(argv, 'generate_experimental_IR_V10', False)
+    setattr(argv, 'keep_quantize_ops_in_IR', False)
+    setattr(argv, 'blobs_as_inputs', False)
+
+
+def parse_input_value(input_value: str):
     """
-    Parses input layers names and input shapes from the cli and returns the parsed object
+    Parses a value of the --input command line parameter and gets a node name, shape and value.
+    The node name includes a port if it is specified.
+    Shape and value is equal to None if they are not specified.
+    Parameters
+    ----------
+    input_value
+        string with a specified node name, shape and value.
+        E.g. 'node_name:0[4]->[1.0 2.0 3.0 4.0]'
+
+    Returns
+    -------
+        Node name, shape and value
+        E.g. 'node_name:0', '4', [1.0 2.0 3.0 4.0]
+    """
+    input_value = input_value.split('->')
+    node_name_with_shape = input_value[0]
+
+    # parse a node name
+    node_name = node_name_with_shape.split('[')[0]
+
+    # parse shape
+    shape = re.findall(r'[(\[]([0-9  -]+)[)\]]', node_name_with_shape)
+    if len(shape) == 0:
+        shape = None
+    elif len(shape) == 1:
+        shape = np.fromstring(shape[0], dtype=np.int64, sep=' ')
+    else:
+        raise Error("Wrong syntax to specify shape. Use --input "
+                    "\"node_name[shape]->value\"")
+
+    # parse value, compute shape and check it
+    value = None
+    if len(input_value) == 2:
+        value = input_value[1]
+        # check format of value
+        if value[0] == '[' and value[-1] != ']' or value[0] != '[' and value[-1] == ']':
+            raise Error("Wrong syntax to specify value. Use --input "
+                        "\"node_name[shape]->value\"")
+        # TODO: support multidimensional value: check format, compute value shape
+        # and check that value shape is equal to shape
+        if '[' in value.strip(' '):
+            value = value.replace('[', '').replace(']', '').split(' ')
+        value_size = len(value)
+        if shape is not None and np.prod(shape) != value_size:
+            raise Error("Wrong syntax to specify value.")
+    elif len(input_value) > 2:
+        raise Error("Wrong syntax to specify value. Use --input "
+                    "\"node_name[shape]->value\"")
+
+    return node_name, shape, value
+
+
+def get_freeze_placeholder_values(argv_input: str, argv_freeze_placeholder_with_value: str):
+    """
+    Parses values for placeholder freezing and input node names
 
     Parameters
     ----------
     argv_input
         string with a list of input layers: either an empty string, or strings separated with comma.
-        E.g. 'inp1,inp2'
+        'node_name1[shape1]->value1,node_name2[shape2]->value2,...'
+    argv_freeze_placeholder_with_value
+        string with a list of input shapes: either an empty string, or tuples separated with comma.
+        'placeholder_name1->value1, placeholder_name2->value2,...'
+
+    Returns
+    -------
+        parsed placeholders with values for freezing
+        input nodes cleaned from shape info
+
+    """
+    placeholder_values = {}
+    input_node_names = None
+
+    if argv_freeze_placeholder_with_value is not None:
+        for plh_with_value in argv_freeze_placeholder_with_value.split(','):
+            plh_with_value = plh_with_value.split('->')
+            if len(plh_with_value) != 2:
+                raise Error("Wrong replacement syntax. Use --freeze_placeholder_with_value "
+                            "\"node1_name->value1,node2_name->value2\"")
+            node_name = plh_with_value[0]
+            value = plh_with_value[1]
+            if node_name in placeholder_values and placeholder_values[node_name] != value:
+                raise Error("Overriding replacement value of the placeholder with name '{}': old value = {}, new value = {}"
+                            ".".format(node_name, placeholder_values[node_name], value))
+            if '[' in value.strip(' '):
+                value = value.replace('[', '').replace(']', '').split(' ')
+            placeholder_values[node_name] = value
+
+    if argv_input is not None:
+        input_node_names = ''
+        # walkthrough all input values and save values for freezing
+        for input_value in argv_input.split(','):
+            node_name, _, value = parse_input_value(input_value)
+            input_node_names = input_node_names + ',' + node_name  if input_node_names != '' else node_name
+            if value is None: # no value is specified for freezing
+                continue
+            if node_name in placeholder_values and placeholder_values[node_name] != value:
+                raise Error("Overriding replacement value of the placeholder with name '{}': old value = {}, new value = {}"
+                            ".".format(node_name, placeholder_values[node_name], value))
+            placeholder_values[node_name] = value
+
+    return placeholder_values, input_node_names
+
+
+def get_placeholder_shapes(argv_input: str, argv_input_shape: str, argv_batch=None):
+    """
+    Parses input layers names and input shapes from the cli and returns the parsed object.
+    All shapes are specified only through one command line option either --input or --input_shape.
+
+    Parameters
+    ----------
+    argv_input
+        string with a list of input layers: either an empty string, or strings separated with comma.
+        E.g. 'inp1,inp2', 'node_name1[shape1]->value1,node_name2[shape2]->value2'
     argv_input_shape
         string with a list of input shapes: either an empty string, or tuples separated with comma.
         E.g. '(1,2),(3,4)'.
@@ -716,6 +760,26 @@ def get_placeholder_shapes(argv_input: str, argv_input_shape: str, argv_batch=No
     if argv_input_shape and argv_batch:
         raise Error("Both --input_shape and --batch were provided. Please provide only one of them. " +
                     refer_to_faq_msg(56))
+
+    # attempt to extract shapes from --input parameters
+    placeholder_shapes = dict()
+    are_shapes_specified_through_input = False
+    if argv_input:
+        for input_value in argv_input.split(','):
+            node_name, shape, _ = parse_input_value(input_value)
+            placeholder_shapes[node_name] = shape
+            if shape is not None:
+                are_shapes_specified_through_input = True
+
+    if argv_input_shape and are_shapes_specified_through_input:
+        raise Error("Shapes are specified using both --input and --input_shape command-line parameters, but only one parameter is allowed.")
+
+    if argv_batch and are_shapes_specified_through_input:
+        raise Error("Shapes are specified using both --input and --batch command-line parameters, but only one parameter is allowed.")
+
+    if are_shapes_specified_through_input:
+        return placeholder_shapes
+
     shapes = list()
     inputs = list()
     placeholder_shapes = None
@@ -745,6 +809,8 @@ def get_placeholder_shapes(argv_input: str, argv_input_shape: str, argv_batch=No
 
     # check if number of shapes does not match number of passed inputs
     elif argv_input and (len(shapes) == len(inputs) or len(shapes) == 0):
+        # clean inputs from values for freezing
+        inputs = list(map(lambda x: x.split('->')[0], inputs))
         placeholder_shapes = dict(zip_longest(inputs,
                                               map(lambda x: np.fromstring(x, dtype=np.int64,
                                                                           sep=',') if x else None, shapes)))
@@ -780,6 +846,11 @@ def parse_tuple_pairs(argv_values: str):
     data_str = argv_values
     while True:
         tuples_matches = re.findall(r'[(\[]([0-9., -]+)[)\]]', data_str, re.IGNORECASE)
+        if not tuples_matches :
+            raise Error(
+                "Mean/scale values should be in format: data(1,2,3),info(2,3,4)" +
+                " or just plain set of them without naming any inputs: (1,2,3),(2,3,4). " +
+                refer_to_faq_msg(101), argv_values)
         tuple_value = tuples_matches[0]
         matches = data_str.split(tuple_value)
 
@@ -793,9 +864,8 @@ def parse_tuple_pairs(argv_values: str):
                     # error - tuple with name is also specified
                     raise Error(
                         "Mean/scale values should either contain names of input layers: data(1,2,3),info(2,3,4)" +
-                        " or just plain set of them without naming any inputs: (1,2,3),(2,3,4). " +
-                        "For more information, please refer to to Model Optimizer FAQ, question #84.".format(
-                            argv_values))
+                        " or just plain set of them without naming any inputs: (1,2,3),(2,3,4)." +
+                        refer_to_faq_msg(101), argv_values)
             for match in tuples_matches:
                 res.append(np.fromstring(match, dtype=float, sep=','))
             break
@@ -999,4 +1069,33 @@ def check_positive(value):
         raise argparse.ArgumentTypeError("expected a positive integer value")
 
     return int_value
+
+
+def depersonalize(value: str):
+    if not isinstance(value, str):
+        return value
+    res = []
+    for path in value.split(','):
+        if os.path.isdir(path):
+            res.append('DIR')
+        elif os.path.isfile(path):
+            res.append(os.path.join('DIR', os.path.split(path)[1]))
+        else:
+            res.append(path)
+    return ','.join(res)
+
+
+def get_meta_info(argv: argparse.Namespace):
+    meta_data = {'unset': []}
+    for key, value in argv.__dict__.items():
+        if value is not None:
+            value = depersonalize(value)
+            meta_data[key] = value
+        else:
+            meta_data['unset'].append(key)
+    # The attribute 'k' is treated separately because it points to not existing file by default
+    for key in ['k']:
+        if key in meta_data:
+            meta_data[key] = ','.join([os.path.join('DIR', os.path.split(i)[1]) for i in meta_data[key].split(',')])
+    return meta_data
 

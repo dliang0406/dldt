@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -14,22 +14,3 @@
  limitations under the License.
 """
 
-import networkx as nx
-
-from mo.front.common.partial_infer.elemental import copy_shape_infer
-from mo.ops.op import Op
-
-
-class ReLU(Op):
-    op = 'ReLU'
-    enabled = True
-
-    def __init__(self, graph: nx.MultiDiGraph, attrs: dict):
-        super().__init__(graph, {
-            'type': __class__.op,
-            'op': __class__.op,
-            'infer': copy_shape_infer
-        }, attrs)
-
-    def supported_attrs(self):
-        return ['negative_slope']

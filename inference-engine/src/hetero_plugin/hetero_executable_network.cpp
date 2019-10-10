@@ -1,34 +1,42 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include "hetero_executable_network.h"
-#include "hetero_async_infer_request.h"
+#include "ie_metric_helpers.hpp"
+#include "hetero_executable_network.hpp"
+#include "hetero_async_infer_request.hpp"
 #include "ie_util_internal.hpp"
-#include "hetero_device_loader.h"
+#include "hetero_device_loader.hpp"
+#include "hetero_fallback_policy.hpp"
+#include "hetero_graph_splitter.hpp"
 
-#include <array>
-#include <set>
+#include <vector>
+#include <map>
 #include <utility>
-#include <unordered_map>
 #include <fstream>
 #include <algorithm>
+#include <string>
+#include <memory>
+#include <unordered_set>
+#include <array>
 
 #include <ie_plugin_dispatcher.hpp>
-#include <ie_graph_splitter.hpp>
-#include "fallback_policy.h"
-#include <caseless.hpp>
+#include "details/caseless.hpp"
 #include "ie_plugin_config.hpp"
+#include "cpp_interfaces/interface/ie_internal_plugin_config.hpp"
+#include "cpp_interfaces/base/ie_inference_plugin_api.hpp"
+#include "cpp_interfaces/impl/ie_plugin_internal.hpp"
 #include "hetero/hetero_plugin_config.hpp"
 #include "precision_utils.h"
 
 using namespace InferenceEngine;
+using namespace details;
 using namespace HeteroPlugin;
 using namespace InferenceEngine::PluginConfigParams;
 using namespace InferenceEngine::HeteroConfigParams;
 
 namespace {
+
 std::vector<std::string> getAffinities(InferenceEngine::ICNNNetwork &network) {
     std::vector<std::string> ret;
     std::unordered_set<std::string> affinities;
@@ -46,16 +54,15 @@ std::vector<std::string> getAffinities(InferenceEngine::ICNNNetwork &network) {
 void dumpGraph(InferenceEngine::ICNNNetwork &network,
                const std::vector<LayersSet> &subgraphs,
                std::ostream &stream) {
-    static const std::array<const char *, 9> colors{{
-                                                            "#FFC405",
-                                                            "#20F608",
-                                                            "#F1F290",
-                                                            "#C405FF",
-                                                            "#BCFF05",
-                                                            "#05FFC4",
-                                                            "#FFC405",
-                                                            "#5A5DF0",
-                                                            "#FF2E05"}};
+    static const std::array<const char *, 9> colors{{"#FFC405",
+                                                     "#20F608",
+                                                     "#F1F290",
+                                                     "#C405FF",
+                                                     "#BCFF05",
+                                                     "#05FFC4",
+                                                     "#FFC405",
+                                                     "#5A5DF0",
+                                                     "#FF2E05"}};
     auto split_color = [subgraphs](const CNNLayerPtr layer,
                                    ordered_properties &printed_properties,
                                    ordered_properties &node_properties) {
@@ -81,16 +88,25 @@ void dumpGraph(InferenceEngine::ICNNNetwork &network,
 }   // namespace
 
 HeteroExecutableNetwork::HeteroExecutableNetwork(InferenceEngine::ICNNNetwork &network,
+                                                 const ICore * core,
                                                  const std::map<std::string, std::string> &config,
                                                  const std::vector<InferenceEngine::IExtensionPtr> &extensions,
-                                                 MapDeviceLoaders& deviceLoaders) :
-    _deviceLoaders(deviceLoaders) {
-    load(network, config, extensions);
+                                                 MapDeviceLoaders& deviceLoaders,
+                                                 InferenceEngine::IErrorListener *listener) :
+    _deviceLoaders(deviceLoaders),
+    _name(network.getName()) {
+    load(network, core, _config = config, extensions, listener);
 }
 
+void dla_layer_colorer(const CNNLayerPtr layer,
+                       ordered_properties &printed_properties,
+                       ordered_properties &node_properties);
+
 void HeteroExecutableNetwork::load(InferenceEngine::ICNNNetwork &network_,
+                                   const ICore * core,
                                    const std::map<std::string, std::string> &config,
-                                   const std::vector<InferenceEngine::IExtensionPtr> &extensions) {
+                                   const std::vector<InferenceEngine::IExtensionPtr> &extensions,
+                                   InferenceEngine::IErrorListener *listener) {
     auto networkPtr = cloneNet(network_);
     auto& network = *networkPtr;
 
@@ -101,21 +117,38 @@ void HeteroExecutableNetwork::load(InferenceEngine::ICNNNetwork &network_,
         CNNLayer::Ptr layer = *i;
         if (!layer->affinity.empty()) {
             allEmpty = false;
+            break;
         }
         i++;
     }
 
     auto itDumpDotFile = config.find(KEY_HETERO_DUMP_GRAPH_DOT);
     bool dumpDotFile = itDumpDotFile != config.end() ? itDumpDotFile->second == YES : false;
+#ifndef NDEBUG
+    dumpDotFile  = true;
+#endif
 
     if (allEmpty) {
-        FallbackPolicy fbPolicy(_deviceLoaders, dumpDotFile);
+        FallbackPolicy fbPolicy(_deviceLoaders, dumpDotFile, core);
         auto it = config.find("TARGET_FALLBACK");
         if (it != config.end()) {
             fbPolicy.init(it->second, config, extensions);
-            fbPolicy.setAffinity(config, network);
+            IE_SUPPRESS_DEPRECATED_START
+            if (listener)
+                for (auto& device_loader : _deviceLoaders)
+                    device_loader.second->SetLogCallback(*listener);
+            IE_SUPPRESS_DEPRECATED_END
+            fbPolicy.setAffinity(fbPolicy.getAffinities(config, network), network);
         } else {
             THROW_IE_EXCEPTION << "The 'TARGET_FALLBACK' option was not defined for heterogeneous plugin";
+        }
+    } else {
+        if (dumpDotFile) {
+            std::stringstream stream(std::stringstream::out);
+            stream << "hetero_affinity_" << network.getName() << ".dot";
+
+            std::ofstream file(stream.str().c_str());
+            saveGraphToDot(network, file, dla_layer_colorer);
         }
     }
 
@@ -128,6 +161,7 @@ void HeteroExecutableNetwork::load(InferenceEngine::ICNNNetwork &network_,
             layer->affinity.empty()) {
             someEmptyAffinity = true;
             layerEmptyAffinity = layer;
+            break;
         }
         el++;
     }
@@ -156,42 +190,53 @@ void HeteroExecutableNetwork::load(InferenceEngine::ICNNNetwork &network_,
 
     auto subgraphs = splitGraph(network, getAffinities(network));
 
-    if (dumpDotFile) {
-        char name[1024];
-        network.getName(name, sizeof(name));
+    sortSubgraphs(subgraphs);
 
+    if (dumpDotFile) {
         std::stringstream stream(std::stringstream::out);
-        stream << "hetero_subgraphs_" << name << ".dot";
+        stream << "hetero_subgraphs_" << network.getName() << ".dot";
 
         std::ofstream file(stream.str().c_str());
         dumpGraph(network, subgraphs, file);
     }
 
-    sortSubgraphs(subgraphs);
-
     std::vector<NetworkDesc> descs;
     PluginDispatcher dispatcher({ "" });
     std::vector<CNNLayerPtr> tempLayers;
 
-    // we need to create plugins first to use them later during selection of best precisino for intermediate blobs
+    // we need to create plugins first to use them later during selection of best precision for intermediate blobs
     for (auto &&subgraph : subgraphs) {
         assert(!subgraph.empty());
         auto affinity = (*subgraph.begin())->affinity;
         assert(!affinity.empty());
+        _affinities.push_back(affinity);
         if (_deviceLoaders.find(affinity) == _deviceLoaders.end()) {
             // TODO: here is a duplication of the code with FallbackPolicy::init
+            IE_SUPPRESS_DEPRECATED_START
             IHeteroDeviceLoader::Ptr loader;
-            loader = std::make_shared<HeteroDeviceLoader>(affinity);
-            HeteroDeviceLoader *pdl = dynamic_cast<HeteroDeviceLoader *>(loader.get());
+            loader = std::make_shared<HeteroDeviceLoader>(affinity, core);
+            HeteroDeviceLoader *pdl = static_cast<HeteroDeviceLoader *>(loader.get());
+            IE_SUPPRESS_DEPRECATED_END
             pdl->initConfigs(config, extensions);
             _deviceLoaders[affinity] = loader;
         }
+        IE_SUPPRESS_DEPRECATED_START
+        if (listener)
+            _deviceLoaders[affinity]->SetLogCallback(*listener);
+        IE_SUPPRESS_DEPRECATED_END
     }
+
+    InferenceEngine::ICNNNetworkStats* networkStats = nullptr;
+    if (StatusCode::OK != network.getStats(&networkStats, nullptr)) {
+        networkStats = nullptr;
+    }
+
 
     for (auto &&subgraph : subgraphs) {
         auto affinity = (*subgraph.begin())->affinity;
         tempLayers.assign(subgraph.begin(), subgraph.end());
-        auto tempNetwork = cloneNet(tempLayers);
+        auto tempNetwork = cloneNet(tempLayers, networkStats);
+        tempNetwork->setName(network.getName() + "_" + std::to_string(std::distance(subgraphs.data(), &subgraph)));
         // restoring some outputs from original net if they are not marked as output automatically
         // this might happen if output was set manually for origin network and
         // it doesn't go to next subgraph
@@ -209,7 +254,7 @@ void HeteroExecutableNetwork::load(InferenceEngine::ICNNNetwork &network_,
         for (auto &&it : externalInputsData) {
             auto inp = clonedInputs.find(it.first);
             if (inp != clonedInputs.end() && nullptr != inp->second) {
-                inp->second->setInputPrecision(it.second->getInputPrecision());
+                inp->second->setPrecision(it.second->getPrecision());
                 inp->second->getPreProcess() = it.second->getPreProcess();
             }
         }
@@ -217,9 +262,10 @@ void HeteroExecutableNetwork::load(InferenceEngine::ICNNNetwork &network_,
         // set precision for intermediate data (not for external) to FP32
         // later on we have to add Plugin::getPreferableInputPrecision(network) and
         // Plugin::getPreferableOutputPrecision(network) and set precision based on this info
+        // TODO(amalyshe) add clever selectino of precision for intermediate blobs
         for (auto &&it : clonedInputs) {
             if (externalInputsData.find(it.first) == externalInputsData.end()) {
-                it.second->setInputPrecision(Precision::FP32);
+                it.second->setPrecision(Precision::FP32);
             }
         }
 
@@ -228,66 +274,6 @@ void HeteroExecutableNetwork::load(InferenceEngine::ICNNNetwork &network_,
         for (auto &&o : tmpOutputs) {
             if (externalOutputsData.find(o.first) == externalOutputsData.end()) {
                 o.second->setPrecision(Precision::FP32);
-            }
-        }
-
-        // Temporal solution until each plugin starts to support desirable precision
-        // Only for CPU registered device we are changing all FP16 types to FP32 and convert blobs if any
-        if (affinity == "CPU") {
-            tempNetwork->setPrecision(Precision::FP32);
-            details::CNNNetworkIterator itcpu(reinterpret_cast<ICNNNetwork *>(tempNetwork.get()));
-            bool allEmpty = true;
-            while (itcpu != details::CNNNetworkIterator()) {
-                CNNLayer::Ptr layer = *itcpu;
-                layer->precision = Precision::FP32;
-                // take all input and output data, set FP32 precision for them
-                for (auto o : layer->outData) {
-                    if (externalInputsData.find(o->getName()) == externalInputsData.end() &&
-                        externalOutputsData.find(o->getName()) == externalOutputsData.end()) {
-                        o->setPrecision(Precision::FP32);
-                    }
-                }
-                for (auto i : layer->insData) {
-                    if (externalInputsData.find(i.lock()->getName()) == externalInputsData.end() &&
-                        externalOutputsData.find(i.lock()->getName()) == externalOutputsData.end()) {
-                        i.lock()->setPrecision(Precision::FP32);
-                    }
-                }
-
-                auto convertBlobFP16toFP32 = [](Blob::Ptr blob) -> Blob::Ptr {
-                    Blob::Ptr weightsBlob = make_shared_blob<float>(Precision::FP32, blob->layout(), blob->dims());
-                    weightsBlob->allocate();
-                    float* target = weightsBlob->buffer().as<float*>();
-                    short* source = blob->buffer().as<short *>();
-                    PrecisionUtils::f16tof32Arrays(target, source, blob->size(), 1.0f, 0.0f);
-                    return weightsBlob;
-                };
-                // convert blobs
-                auto wLayer = dynamic_cast<InferenceEngine::WeightableLayer *>(layer.get());
-                if (wLayer) {
-                    // verify
-                    if (wLayer->_weights && wLayer->_weights->precision() == Precision::FP16) {
-                        wLayer->_weights = convertBlobFP16toFP32(wLayer->_weights);
-                    } else if (wLayer->_weights && wLayer->_weights->precision() != Precision::FP32) {
-                        THROW_IE_EXCEPTION << "weights for layer '" << wLayer->name << "' has unsupported precision";
-                    }
-                    if (wLayer->_biases && wLayer->_biases->precision() == Precision::FP16) {
-                        wLayer->_biases = convertBlobFP16toFP32(wLayer->_biases);
-                    } else if (wLayer->_biases && wLayer->_biases->precision() != Precision::FP32) {
-                        THROW_IE_EXCEPTION << "biases for layer '" << wLayer->name << "' has unsupported precision";
-                    }
-                }
-                for (auto&& blob : layer->blobs) {
-                    auto&& data = blob.second;
-                    if (nullptr != data) {
-                        if (data->precision() == Precision::FP16) {
-                            data = convertBlobFP16toFP32(data);
-                        } else if (data->precision() != Precision::FP32) {
-                            THROW_IE_EXCEPTION << "weights '" << blob.first << "' for layer '" << layer->name << "' has unsupported precision";
-                        }  // else no need to convert
-                    }
-                }
-                itcpu++;
             }
         }
 
@@ -313,7 +299,23 @@ void HeteroExecutableNetwork::load(InferenceEngine::ICNNNetwork &network_,
     for (auto &&d : descs) {
         IExecutableNetwork::Ptr ret;
         ResponseDesc resp;
-        StatusCode status = d._deviceLoader->LoadNetwork(d._device, ret, *d._clonedNetwork, config, &resp);
+
+        InputsDataMap subnetworkInputs;
+        d._clonedNetwork->getInputsInfo(subnetworkInputs);
+        bool isInputSubnetwork = (subnetworkInputs.end() != std::find_first_of(
+            subnetworkInputs.begin(), subnetworkInputs.end(),
+            externalInputsData.begin(), externalInputsData.end(),
+            [] (const InputsDataMap::value_type& lhs, const InputsDataMap::value_type& rhs) {
+                return lhs.first == rhs.first;
+            }));
+
+        auto cfg = config;
+        cfg[IE_INTERNAL_CONFIG_KEY(SUBNETWORK_WITH_NETWORK_INPUTS)] = isInputSubnetwork
+                                                                    ? CONFIG_VALUE(YES)
+                                                                    : CONFIG_VALUE(NO);
+        IE_SUPPRESS_DEPRECATED_START
+        StatusCode status = d._deviceLoader->LoadNetwork(d._device, ret, *d._clonedNetwork, cfg, &resp);
+        IE_SUPPRESS_DEPRECATED_END
         if (status != OK) {
             THROW_IE_EXCEPTION << resp.msg;
         }
@@ -353,4 +355,44 @@ void HeteroExecutableNetwork::CreateInferRequest(IInferRequest::Ptr &asyncReques
     asyncRequest.reset(new InferRequestBase<HeteroAsyncInferRequest>(asyncTreadSafeImpl),
                        [](IInferRequest *p) { p->Release(); });
     asyncTreadSafeImpl->SetPointerToPublicInterface(asyncRequest);
+}
+
+void HeteroExecutableNetwork::GetConfig(const std::string &name, InferenceEngine::Parameter &result, InferenceEngine::ResponseDesc *) const {
+    if (name == "TARGET_FALLBACK") {
+        auto it = _config.find(name);
+        IE_ASSERT(it != _config.end());
+        result = it->second;
+    } else if (name == HETERO_CONFIG_KEY(DUMP_GRAPH_DOT) ||
+               name == CONFIG_KEY(EXCLUSIVE_ASYNC_REQUESTS)) {
+        auto it = _config.find(name);
+        IE_ASSERT(it != _config.end());
+        result = it->second == YES ? true : false;
+    } else {
+        THROW_IE_EXCEPTION << "Unsupported ExecutableNetwork config key: " << name;
+    }
+}
+
+void HeteroExecutableNetwork::GetMetric(const std::string &name, InferenceEngine::Parameter &result, InferenceEngine::ResponseDesc *) const {
+    if (METRIC_KEY(SUPPORTED_METRICS) == name) {
+        result = IE_SET_METRIC(SUPPORTED_METRICS, std::vector<std::string>{
+            METRIC_KEY(NETWORK_NAME),
+            METRIC_KEY(SUPPORTED_METRICS),
+            METRIC_KEY(SUPPORTED_CONFIG_KEYS),
+            METRIC_KEY(OPTIMAL_NUMBER_OF_INFER_REQUESTS)});
+    } else if (METRIC_KEY(SUPPORTED_CONFIG_KEYS) == name) {
+        result = IE_SET_METRIC(SUPPORTED_CONFIG_KEYS, std::vector<std::string>{
+            "TARGET_FALLBACK",
+            HETERO_CONFIG_KEY(DUMP_GRAPH_DOT),
+            CONFIG_KEY(EXCLUSIVE_ASYNC_REQUESTS)});
+    } else if (METRIC_KEY(NETWORK_NAME) == name) {
+        result = IE_SET_METRIC(NETWORK_NAME, _name);
+    } else if (METRIC_KEY(OPTIMAL_NUMBER_OF_INFER_REQUESTS) == name) {
+        unsigned int value = 0u;
+        for (auto&& desc : networks) {
+            value = std::max(value, desc.network->GetMetric(METRIC_KEY(OPTIMAL_NUMBER_OF_INFER_REQUESTS)).as<unsigned int>());
+        }
+        result = IE_SET_METRIC(OPTIMAL_NUMBER_OF_INFER_REQUESTS, value);
+    } else {
+        THROW_IE_EXCEPTION << "Unsupported ExecutableNetwork metric: " << name;
+    }
 }

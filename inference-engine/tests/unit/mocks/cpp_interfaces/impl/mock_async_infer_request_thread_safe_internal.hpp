@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -21,7 +20,7 @@ public:
     void setRequestBusy() {
         AsyncInferRequestThreadSafeInternal::setIsRequestBusy(true);
     }
-
+    using AsyncInferRequestThreadSafeInternal::isRequestBusy;
     bool isRequestBusy() {
         return AsyncInferRequestThreadSafeInternal::isRequestBusy();
     }

@@ -1,9 +1,11 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #pragma once
+
+#include <ie_blob.h>
+
 #include <string>
 #include <memory>
 
@@ -12,7 +14,7 @@ namespace InferenceEngine {
  * @brief minimal interface for memory state implementation
  */
 class IMemoryStateInternal {
- public:
+public:
     using Ptr = std::shared_ptr<IMemoryStateInternal>;
 
     virtual ~IMemoryStateInternal() = default;

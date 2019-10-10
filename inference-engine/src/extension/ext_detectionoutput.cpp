@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -12,6 +11,7 @@
 #include <string>
 #include <utility>
 #include <algorithm>
+#include "ie_parallel.hpp"
 
 namespace InferenceEngine {
 namespace Extensions {
@@ -28,21 +28,23 @@ public:
     explicit DetectionOutputImpl(const CNNLayer* layer) {
         try {
             if (layer->insData.size() != 3)
-                THROW_IE_EXCEPTION << "Incorrect number of input edges.";
+                THROW_IE_EXCEPTION << "Incorrect number of input edges for layer " << layer->name;
             if (layer->outData.empty())
-                THROW_IE_EXCEPTION << "Incorrect number of output edges.";
+                THROW_IE_EXCEPTION << "Incorrect number of output edges for layer " << layer->name;
 
             _num_classes = layer->GetParamAsInt("num_classes");
             _background_label_id = layer->GetParamAsInt("background_label_id", 0);
             _top_k = layer->GetParamAsInt("top_k", -1);
-            _variance_encoded_in_target = layer->GetParamsAsBool("variance_encoded_in_target", false);
+            _variance_encoded_in_target = layer->GetParamAsBool("variance_encoded_in_target", false);
             _keep_top_k = layer->GetParamAsInt("keep_top_k", -1);
             _nms_threshold = layer->GetParamAsFloat("nms_threshold");
             _confidence_threshold = layer->GetParamAsFloat("confidence_threshold", -FLT_MAX);
-            _share_location = layer->GetParamsAsBool("share_location", true);
-            _clip = layer->GetParamsAsBool("clip", false);
-            _decrease_label_id = layer->GetParamsAsBool("decrease_label_id", false);
-            _normalized = layer->GetParamsAsBool("normalized", true);
+            _share_location = layer->GetParamAsBool("share_location", true);
+            _clip_before_nms = layer->GetParamAsBool("clip_before_nms", false) ||
+                               layer->GetParamAsBool("clip", false);  // for backward compatibility
+            _clip_after_nms = layer->GetParamAsBool("clip_after_nms", false);
+            _decrease_label_id = layer->GetParamAsBool("decrease_label_id", false);
+            _normalized = layer->GetParamAsBool("normalized", true);
             _image_height = layer->GetParamAsInt("input_height", 1);
             _image_width = layer->GetParamAsInt("input_width", 1);
             _prior_size = _normalized ? 4 : 5;
@@ -53,12 +55,15 @@ public:
             _code_type = (code_type_str == "caffe.PriorBoxParameter.CENTER_SIZE" ? CodeType::CENTER_SIZE
                                                                                  : CodeType::CORNER);
 
-            _num_priors = static_cast<int>(layer->insData[idx_priors].lock()->dims[0] / _prior_size);
+            _num_priors = static_cast<int>(layer->insData[idx_priors].lock()->getDims().back() / _prior_size);
+            _priors_batches = layer->insData[idx_priors].lock()->getDims().front() != 1;
 
-            if (_num_priors * _num_loc_classes * 4 != layer->insData[idx_location].lock()->dims[0])
-                THROW_IE_EXCEPTION << "Number of priors must match number of location predictions.";
+            if (_num_priors * _num_loc_classes * 4 != static_cast<int>(layer->insData[idx_location].lock()->getDims()[1]))
+                THROW_IE_EXCEPTION << "Number of priors must match number of location predictions ("
+                                   << _num_priors * _num_loc_classes * 4 << " vs "
+                                   << layer->insData[idx_location].lock()->getDims()[1] << ")";
 
-            if (_num_priors * _num_classes != layer->insData[idx_confidence].lock()->dims[0])
+            if (_num_priors * _num_classes != static_cast<int>(layer->insData[idx_confidence].lock()->getTensorDesc().getDims().back()))
                 THROW_IE_EXCEPTION << "Number of priors must match number of confidence predictions.";
 
             if (_decrease_label_id && _background_label_id != 0)
@@ -70,27 +75,27 @@ public:
                                                     static_cast<size_t>(_num_classes),
                                                     static_cast<size_t>(_num_priors),
                                                     4};
-            _decoded_bboxes = InferenceEngine::make_shared_blob<float>({Precision::UNSPECIFIED, bboxes_size, NCHW});
+            _decoded_bboxes = InferenceEngine::make_shared_blob<float>({Precision::FP32, bboxes_size, NCHW});
             _decoded_bboxes->allocate();
 
             InferenceEngine::SizeVector buf_size{static_cast<size_t>(_num),
                                                  static_cast<size_t>(_num_classes),
                                                  static_cast<size_t>(_num_priors)};
-            _buffer = InferenceEngine::make_shared_blob<int>({Precision::UNSPECIFIED, buf_size, {buf_size, {0, 1, 2}}});
+            _buffer = InferenceEngine::make_shared_blob<int>({Precision::I32, buf_size, {buf_size, {0, 1, 2}}});
             _buffer->allocate();
 
             InferenceEngine::SizeVector indices_size{static_cast<size_t>(_num),
                                                      static_cast<size_t>(_num_classes),
                                                      static_cast<size_t>(_num_priors)};
             _indices = InferenceEngine::make_shared_blob<int>(
-                    {Precision::UNSPECIFIED, indices_size, {indices_size, {0, 1, 2}}});
+                    {Precision::I32, indices_size, {indices_size, {0, 1, 2}}});
             _indices->allocate();
 
             InferenceEngine::SizeVector detections_size{static_cast<size_t>(_num * _num_classes)};
-            _detections_count = InferenceEngine::make_shared_blob<int>({Precision::UNSPECIFIED, detections_size, C});
+            _detections_count = InferenceEngine::make_shared_blob<int>({Precision::I32, detections_size, C});
             _detections_count->allocate();
 
-            InferenceEngine::SizeVector conf_size = layer->insData[idx_confidence].lock()->dims;
+            const InferenceEngine::SizeVector &conf_size = layer->insData[idx_confidence].lock()->getTensorDesc().getDims();
             _reordered_conf = InferenceEngine::make_shared_blob<float>({Precision::FP32, conf_size, ANY});
             _reordered_conf->allocate();
 
@@ -102,7 +107,7 @@ public:
             _bbox_sizes->allocate();
 
             InferenceEngine::SizeVector num_priors_actual_size{static_cast<size_t>(_num)};
-            _num_priors_actual = InferenceEngine::make_shared_blob<int>({Precision::UNSPECIFIED, num_priors_actual_size, C});
+            _num_priors_actual = InferenceEngine::make_shared_blob<int>({Precision::I32, num_priors_actual_size, C});
             _num_priors_actual->allocate();
 
             addConfig(layer, {DataConfigurator(ConfLayout::PLN),
@@ -131,10 +136,14 @@ public:
         int *indices_data          = _indices->buffer();
         int *num_priors_actual     = _num_priors_actual->buffer();
 
-        const float *prior_variances = prior_data + _num_priors*_prior_size;
-        const float *ppriors = prior_data;
-
         for (int n = 0; n < N; ++n) {
+            const float *ppriors = prior_data;
+            const float *prior_variances = prior_data + _num_priors*_prior_size;
+            if (_priors_batches) {
+                ppriors += _variance_encoded_in_target ? n*_num_priors*_prior_size : 2*n*_num_priors*_prior_size;
+                prior_variances += _variance_encoded_in_target ? 0 : n*_num_priors*_prior_size;
+            }
+
             if (_share_location) {
                 const float *ploc = loc_data + n*4*_num_priors;
                 float *pboxes = decoded_bboxes_data + n*4*_num_priors;
@@ -167,29 +176,39 @@ public:
         for (int n = 0; n < N; ++n) {
             int detections_total = 0;
 
-#pragma omp parallel for schedule(static)
-            for (int c = 0; c < _num_classes; ++c) {
-                if (c == _background_label_id) {
-                    // Ignore background class.
-                    continue;
-                }
+            if (!_decrease_label_id) {
+                // Caffe style
+                parallel_for(_num_classes, [&](int c) {
+                    if (c != _background_label_id) {  // Ignore background class
+                        int *pindices    = indices_data + n*_num_classes*_num_priors + c*_num_priors;
+                        int *pbuffer     = buffer_data + c*_num_priors;
+                        int *pdetections = detections_data + n*_num_classes + c;
 
-                int *pindices    = indices_data + n*_num_classes*_num_priors + c*_num_priors;
-                int *pbuffer     = buffer_data + c*_num_priors;
-                int *pdetections = detections_data + n*_num_classes + c;
+                        const float *pconf = reordered_conf_data + n*_num_classes*_num_priors + c*_num_priors;
+                        const float *pboxes;
+                        const float *psizes;
+                        if (_share_location) {
+                            pboxes = decoded_bboxes_data + n*4*_num_priors;
+                            psizes = bbox_sizes_data + n*_num_priors;
+                        } else {
+                            pboxes = decoded_bboxes_data + n*4*_num_classes*_num_priors + c*4*_num_priors;
+                            psizes = bbox_sizes_data + n*_num_classes*_num_priors + c*_num_priors;
+                        }
 
-                const float *pconf = reordered_conf_data + n*_num_classes*_num_priors + c*_num_priors;
-                const float *pboxes;
-                const float *psizes;
-                if (_share_location) {
-                    pboxes = decoded_bboxes_data + n*4*_num_priors;
-                    psizes = bbox_sizes_data + n*_num_priors;
-                } else {
-                    pboxes = decoded_bboxes_data + n*4*_num_classes*_num_priors + c*4*_num_priors;
-                    psizes = bbox_sizes_data + n*_num_classes*_num_priors + c*_num_priors;
-                }
+                        nms_cf(pconf, pboxes, psizes, pbuffer, pindices, *pdetections, num_priors_actual[n]);
+                    }
+                });
+            } else {
+                // MXNet style
+                int *pindices = indices_data + n*_num_classes*_num_priors;
+                int *pbuffer = buffer_data;
+                int *pdetections = detections_data + n*_num_classes;
 
-                nms(pconf, pboxes, psizes, pbuffer, pindices, *pdetections, num_priors_actual[n]);
+                const float *pconf = reordered_conf_data + n*_num_classes*_num_priors;
+                const float *pboxes = decoded_bboxes_data + n*4*_num_priors;
+                const float *psizes = bbox_sizes_data + n*_num_priors;
+
+                nms_mx(pconf, pboxes, psizes, pbuffer, pindices, pdetections, _num_priors);
             }
 
             for (int c = 0; c < _num_classes; ++c) {
@@ -217,7 +236,7 @@ public:
                 // Store the new indices.
                 memset(detections_data + n*_num_classes, 0, _num_classes * sizeof(int));
 
-                for (int j = 0; j < conf_index_class_map.size(); ++j) {
+                for (size_t j = 0; j < conf_index_class_map.size(); ++j) {
                     int label = conf_index_class_map[j].second.first;
                     int idx = conf_index_class_map[j].second.second;
                     int *pindices = indices_data + n * _num_classes * _num_priors + label * _num_priors;
@@ -250,8 +269,8 @@ public:
                 for (int i = 0; i < detections_data[n*_num_classes + c]; ++i) {
                     int idx = pindices[c*_num_priors + i];
 
-                    dst_data[count * DETECTION_SIZE + 0] = n;
-                    dst_data[count * DETECTION_SIZE + 1] = _decrease_label_id ? c-1 : c;
+                    dst_data[count * DETECTION_SIZE + 0] = static_cast<float>(n);
+                    dst_data[count * DETECTION_SIZE + 1] = static_cast<float>(_decrease_label_id ? c-1 : c);
                     dst_data[count * DETECTION_SIZE + 2] = pconf[c*_num_priors + idx];
 
                     float xmin = _share_location ? pboxes[idx*4 + 0] :
@@ -262,6 +281,13 @@ public:
                                  pboxes[c*4*_num_priors + idx*4 + 2];
                     float ymax = _share_location ? pboxes[idx*4 + 3] :
                                  pboxes[c*4*_num_priors + idx*4 + 3];
+
+                    if (_clip_after_nms) {
+                        xmin = std::max(0.0f, std::min(1.0f, xmin));
+                        ymin = std::max(0.0f, std::min(1.0f, ymin));
+                        xmax = std::max(0.0f, std::min(1.0f, xmax));
+                        ymax = std::max(0.0f, std::min(1.0f, ymax));
+                    }
 
                     dst_data[count * DETECTION_SIZE + 3] = xmin;
                     dst_data[count * DETECTION_SIZE + 4] = ymin;
@@ -294,8 +320,9 @@ private:
     int _keep_top_k = 0;
     int _code_type = 0;
 
-    bool _share_location = false;
-    bool _clip = false;
+    bool _share_location    = false;
+    bool _clip_before_nms   = false;  // clip bounding boxes before nms step
+    bool _clip_after_nms    = false;  // clip bounding boxes after nms step
     bool _decrease_label_id = false;
 
     int _image_width = 0;
@@ -310,6 +337,7 @@ private:
     int _num = 0;
     int _num_loc_classes = 0;
     int _num_priors = 0;
+    bool _priors_batches = false;
 
     enum CodeType {
         CORNER = 1,
@@ -319,8 +347,11 @@ private:
     void decodeBBoxes(const float *prior_data, const float *loc_data, const float *variance_data,
                       float *decoded_bboxes, float *decoded_bbox_sizes, int* num_priors_actual, int n);
 
-    void nms(const float *conf_data, const float *bboxes, const float *sizes,
-             int *buffer, int *indices, int &detections, int num_priors_actual);
+    void nms_cf(const float *conf_data, const float *bboxes, const float *sizes,
+                int *buffer, int *indices, int &detections, int num_priors_actual);
+
+    void nms_mx(const float *conf_data, const float *bboxes, const float *sizes,
+                int *buffer, int *indices, int *detections, int num_priors_actual);
 
     InferenceEngine::Blob::Ptr _decoded_bboxes;
     InferenceEngine::Blob::Ptr _buffer;
@@ -399,8 +430,7 @@ void DetectionOutputImpl::decodeBBoxes(const float *prior_data,
         }
     }
 
-    #pragma omp parallel for schedule(static)
-    for (int p = 0; p < num_priors_actual[n]; ++p) {
+    parallel_for(num_priors_actual[n], [&](int p) {
         float new_xmin = 0.0f;
         float new_ymin = 0.0f;
         float new_xmax = 0.0f;
@@ -465,7 +495,7 @@ void DetectionOutputImpl::decodeBBoxes(const float *prior_data,
             new_ymax = decode_bbox_center_y + decode_bbox_height / 2.0f;
         }
 
-        if (_clip) {
+        if (_clip_before_nms) {
             new_xmin = std::max(0.0f, std::min(1.0f, new_xmin));
             new_ymin = std::max(0.0f, std::min(1.0f, new_ymin));
             new_xmax = std::max(0.0f, std::min(1.0f, new_xmax));
@@ -478,10 +508,10 @@ void DetectionOutputImpl::decodeBBoxes(const float *prior_data,
         decoded_bboxes[p*4 + 3] = new_ymax;
 
         decoded_bbox_sizes[p] = (new_xmax - new_xmin) * (new_ymax - new_ymin);
-    }
+    });
 }
 
-void DetectionOutputImpl::nms(const float* conf_data,
+void DetectionOutputImpl::nms_cf(const float* conf_data,
                           const float* bboxes,
                           const float* sizes,
                           int* buffer,
@@ -517,6 +547,59 @@ void DetectionOutputImpl::nms(const float* conf_data,
         if (keep) {
             indices[detections] = idx;
             detections++;
+        }
+    }
+}
+
+void DetectionOutputImpl::nms_mx(const float* conf_data,
+                          const float* bboxes,
+                          const float* sizes,
+                          int* buffer,
+                          int* indices,
+                          int* detections,
+                          int num_priors_actual) {
+    int count = 0;
+    for (int i = 0; i < num_priors_actual; ++i) {
+        float conf = -1;
+        int id = 0;
+        for (int c = 1; c < _num_classes; ++c) {
+            float temp = conf_data[c*_num_priors + i];
+            if (temp > conf) {
+                conf = temp;
+                id = c;
+            }
+        }
+
+        if (id > 0 && conf >= _confidence_threshold) {
+            indices[count++] = id*_num_priors + i;
+        }
+    }
+
+    int num_output_scores = (_top_k == -1 ? count : std::min<int>(_top_k, count));
+
+    std::partial_sort_copy(indices, indices + count,
+                           buffer, buffer + num_output_scores,
+                           ConfidenceComparator(conf_data));
+
+    for (int i = 0; i < num_output_scores; ++i) {
+        const int idx = buffer[i];
+        const int cls = idx/_num_priors;
+        const int prior = idx%_num_priors;
+
+        int &ndetection = detections[cls];
+        int *pindices = indices + cls*_num_priors;
+
+        bool keep = true;
+        for (int k = 0; k < ndetection; ++k) {
+            const int kept_idx = pindices[k];
+            float overlap = JaccardOverlap(bboxes, sizes, prior, kept_idx);
+            if (overlap > _nms_threshold) {
+                keep = false;
+                break;
+            }
+        }
+        if (keep) {
+            pindices[ndetection++] = prior;
         }
     }
 }

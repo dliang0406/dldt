@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -37,7 +36,7 @@ public:
 TEST_F(BlobProxyTests, convertByteBlobToFloat) {
     const int size = 4;
     float test_array[size] = {2.2f, 3.5f, 1.1f, 0.0f};
-    TBlob<uint8_t>::Ptr b(new TBlob<uint8_t>(Precision::U8, C, {size * sizeof(float)}));
+    TBlob<uint8_t>::Ptr b(new TBlob<uint8_t>({ Precision::U8, {size * sizeof(float)}, C }));
     b->allocate();
     uint8_t *sPtr = (uint8_t *) test_array;
     uint8_t *dPtr = b->data();
@@ -47,23 +46,20 @@ TEST_F(BlobProxyTests, convertByteBlobToFloat) {
     }
 }
 
-TEST_F(BlobProxyTests, shouldThrowOnAllocate) {
-    SizeVector v = {1, 2, 3};
-    auto allocator = createMockAllocator();
-
-    TBlobProxy<float> proxy(Precision::FP32, C, TBlob<float>(Precision::FP32, CHW, v, dynamic_pointer_cast<IAllocator>(allocator)), 2, {2});
-
-    EXPECT_THROW(((Blob&)proxy).allocate(), InferenceEngineException);
-}
-
-TEST_F(BlobProxyTests, shouldThrowOnDeAllocate)
+TEST_F(BlobProxyTests, shouldNotDeAllocate)
 {
     SizeVector v = {1, 2, 3};
     auto allocator = createMockAllocator();
 
-    TBlobProxy<float> proxy(Precision::FP32, C, TBlob<float>(Precision::FP32, CHW, v, dynamic_pointer_cast<IAllocator>(allocator)), 2, {2});
+    TBlob<float> blob({ Precision::FP32, v, CHW }, dynamic_pointer_cast<IAllocator>(allocator));
 
-    EXPECT_THROW(((Blob&)proxy).deallocate(), InferenceEngineException);
+    Blob::Ptr spBlob(&blob, [](Blob*) {
+        //don't delete
+    });
+
+    TBlobProxy<float> proxy(Precision::FP32, C, spBlob, 2, {2});
+
+    EXPECT_EQ(((Blob&)proxy).deallocate(), false);
 }
 
 
@@ -79,10 +75,14 @@ TEST_F(BlobProxyTests, canAccessProxyBlobUsingBaseMethod)
     EXPECT_CALL(*allocator.get(), unlock(_)).Times(1);
     EXPECT_CALL(*allocator.get(), free(_)).Times(1);
 
-    TBlob<float> blob(Precision::FP32, CHW, v, dynamic_pointer_cast<IAllocator>(allocator));
+    TBlob<float> blob({ Precision::FP32, v, CHW }, dynamic_pointer_cast<IAllocator>(allocator));
     blob.allocate();
 
-    TBlobProxy<float> proxy(Precision::FP32, C, move(blob), 2, {2});
+    Blob::Ptr spBlob(&blob, [](Blob*) {
+        //don't delete
+    });
+
+    TBlobProxy<float> proxy(Precision::FP32, C, spBlob, 2, {2});
 
     auto proxyBuffer = proxy.buffer();
     float *ptr = (float*)(void*)proxyBuffer;
@@ -102,10 +102,14 @@ TEST_F(BlobProxyTests, canAccessProxyBlobUsingHelpers)
     EXPECT_CALL(*allocator.get(), unlock(_)).Times(2);
     EXPECT_CALL(*allocator.get(), free(_)).Times(1);
 
-    TBlob<float> blob(Precision::FP32, CHW, v, dynamic_pointer_cast<IAllocator>(allocator));
+    TBlob<float> blob({Precision::FP32, v, CHW }, dynamic_pointer_cast<IAllocator>(allocator));
     blob.allocate();
 
-    TBlobProxy<float> proxy(Precision::FP32, C, std::move(blob), 2, {2});
+    Blob::Ptr spBlob(&blob, [](Blob*) {
+        //don't delete
+    });
+
+    TBlobProxy<float> proxy(Precision::FP32, C, spBlob, 2, {2});
 
     auto proxyData = proxy.data();
     float *ptr = (float * )&proxyData[0];
@@ -128,7 +132,7 @@ TEST_F(BlobProxyTests, canCreateProxyBlobFromDifferentBaseBlobType)
     EXPECT_CALL(*allocator.get(), unlock(_)).Times(1);
     EXPECT_CALL(*allocator.get(), free(_)).Times(1);
 
-    TBlob<uint8_t > blob(Precision::U8, CHW, v, dynamic_pointer_cast<IAllocator>(allocator));
+    TBlob<uint8_t > blob({ Precision::U8, v, CHW }, dynamic_pointer_cast<IAllocator>(allocator));
     blob.allocate();
 
     Blob::Ptr spBlob (&blob, [](Blob*){
@@ -151,7 +155,7 @@ TEST_F(BlobProxyTests, canNotCreateBlobWithOffsetOfSizeOutOfOriginal) {
     EXPECT_CALL(*allocator.get(), alloc(1 * 1 * 3 * sizeof(float))).WillRepeatedly(Return((void*)1));
     EXPECT_CALL(*allocator.get(), free(_)).Times(1);
 
-    TBlob<float> blob(Precision::FP32, CHW, v, dynamic_pointer_cast<IAllocator>(allocator));
+    TBlob<float> blob({ Precision::FP32, v, CHW }, dynamic_pointer_cast<IAllocator>(allocator));
     blob.allocate();
 
     Blob::Ptr spBlob (&blob, [](Blob*){
@@ -176,7 +180,7 @@ TEST_F(BlobProxyTests, canAccessBothArraysAfterProxying)
     EXPECT_CALL(*allocator.get(), unlock(_)).Times(2);
     EXPECT_CALL(*allocator.get(), free(_)).Times(1);
 
-    TBlob<uint8_t> blob(Precision::U8, CHW, v, dynamic_pointer_cast<IAllocator>(allocator));
+    TBlob<uint8_t> blob({ Precision::U8, v, CHW }, dynamic_pointer_cast<IAllocator>(allocator));
     blob.allocate();
 
     Blob::Ptr spBlob (&blob, [](Blob*){
@@ -201,7 +205,7 @@ TEST_F(BlobProxyTests, canAccessBothArraysAfterProxying)
 TEST_F(BlobProxyTests, convertTwoByteBlobToFloat) {
     const int size = 4;
     float test_array[size] = {2.2f, 3.5f, 1.1f, 0.0f};
-    TBlob<uint16_t>::Ptr b(new TBlob<uint16_t>(Precision::U16, C, {size*sizeof(float) / sizeof(uint16_t)}));
+    TBlob<uint16_t>::Ptr b(new TBlob<uint16_t>(TensorDesc(Precision::U16, {size*sizeof(float) / sizeof(uint16_t)}, C)));
     b->allocate();
     uint16_t *sPtr = (uint16_t *) test_array;
     uint16_t *dPtr = b->data();
@@ -220,8 +224,14 @@ TEST_F(BlobProxyTests, convertTwoByteBlobToFloat) {
 }
 
 TEST_F(BlobProxyTests, throwsIfSmallProxyObjectSize) {
-    TBlob<float>::Ptr b(new TBlob<float>(Precision::FP32, C));
-    b->set({ 1.0f, 2.0f, 3.0f });
+    TBlob<float>::Ptr b(new TBlob<float>(TensorDesc(Precision::FP32, C)));
+
+    b->getTensorDesc().setDims({3});
+    b->allocate();
+    b->data()[0] = 1.0f;
+    b->data()[1] = 2.0f;
+    b->data()[2] = 3.0f;
+
     try {
         TBlobProxy<uint8_t> proxy(Precision::U8, C, b, 0, { b->byteSize() + 1 });
         FAIL() << "Should have failed by now: proxy size is larger than blob size";
@@ -230,24 +240,27 @@ TEST_F(BlobProxyTests, throwsIfSmallProxyObjectSize) {
 }
 
 TEST_F(BlobProxyTests, canReturnConstantData) {
-    TBlob<float>::Ptr b(new TBlob<float>(Precision::FP32, C));
-    b->set({ 1.0f, 2.0f, 3.0f });
+    TBlob<float>::Ptr b(new TBlob<float>(TensorDesc(Precision::FP32, C)));
+
+    b->getTensorDesc().setDims({3});
+    b->allocate();
+    b->data()[0] = 1.0f;
+    b->data()[1] = 2.0f;
+    b->data()[2] = 3.0f;
+
     TBlobProxy<uint8_t> const proxy(Precision::U8, C, b, 0, { b->byteSize() });
     ASSERT_NE(proxy.cbuffer().as<const void*>(), nullptr);
 }
 
-TEST_F(BlobProxyTests, noAllocDeallocLogic) {
-    TBlob<float>::Ptr b(new TBlob<float>(Precision::FP32, C));
-    b->set({ 1.0f, 2.0f, 3.0f });
-    TBlobProxy<uint8_t> proxy(Precision::U8, C, b, 0, { b->byteSize() });
-    ASSERT_ANY_THROW(((Blob*) &proxy)->allocate());
-    ASSERT_ANY_THROW(((Blob*) &proxy)->deallocate());
-}
-
-
 TEST_F(BlobProxyTests, canIterateOverData) {
-    TBlob<uint8_t>::Ptr b(new TBlob<uint8_t >(Precision::FP32, C));
-    b->set({ 1, 2, 3 });
+    TBlob<uint8_t>::Ptr b(new TBlob<uint8_t >(TensorDesc(Precision::FP32, C)));
+
+    b->getTensorDesc().setDims({3});
+    b->allocate();
+    b->data()[0] = 1.0f;
+    b->data()[1] = 2.0f;
+    b->data()[2] = 3.0f;
+
     TBlobProxy<uint8_t> proxy(Precision::U8, C, b, 1, { 2 });
     vector<uint8_t > u8buffer;
     for (auto & element : proxy) {
@@ -259,8 +272,14 @@ TEST_F(BlobProxyTests, canIterateOverData) {
 }
 
 TEST_F(BlobProxyTests, canIterateOverReadOnly) {
-    TBlob<uint8_t>::Ptr b(new TBlob<uint8_t >(Precision::FP32, C));
-    b->set({ 1, 2, 3 });
+    TBlob<uint8_t>::Ptr b(new TBlob<uint8_t >(TensorDesc(Precision::FP32, C)));
+
+    b->getTensorDesc().setDims({3});
+    b->allocate();
+    b->data()[0] = 1.0f;
+    b->data()[1] = 2.0f;
+    b->data()[2] = 3.0f;
+
     TBlobProxy<uint8_t> const proxy(Precision::U8, C, b, 1, { 2 });
     vector<uint8_t > u8buffer;
     for (auto  element : proxy) {

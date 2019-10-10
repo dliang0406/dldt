@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -9,11 +8,14 @@
 #include <algorithm>
 #include <string>
 #include <mkldnn_extension_utils.h>
+#include "details/caseless.hpp"
 
 using namespace mkldnn;
 using namespace MKLDNNPlugin;
 using namespace InferenceEngine;
+using namespace InferenceEngine::details;
 
+// TODO: (ichuraev) I don't fully sure that names of types and parameters are correct for square, abs, sqrt, linear, bounded_relu and soft_relu
 caseless_map<std::string, std::function<void(GenericLayer*, mkldnn::algorithm&, float&, float&)>> MKLDNNActivationNode::initializers = {
         {"relu", [](GenericLayer* activationLayer, mkldnn::algorithm& algorithm, float& alpha, float& beta) {
             alpha = activationLayer->GetParamAsFloat("negative_slope", 0.0f);
@@ -74,25 +76,34 @@ caseless_map<std::string, std::function<void(GenericLayer*, mkldnn::algorithm&, 
             alpha = activationLayer->GetParamAsFloat("max", 1.0f);
             beta = activationLayer->GetParamAsFloat("min", 0.0f);
             algorithm = eltwise_clamp;
+        }},
+        {"exp", [](GenericLayer* activationLayer, mkldnn::algorithm& algorithm, float& alpha, float& beta) {
+            alpha = 0.0f;
+            beta = 0.0f;
+            algorithm = eltwise_exp;
+        }},
+        {"not", [](GenericLayer* activationLayer, mkldnn::algorithm& algorithm, float& alpha, float& beta) {
+            alpha = 0.0f;
+            beta = 0.0f;
+            algorithm = eltwise_not;
         }}
 };
 
-MKLDNNActivationNode::MKLDNNActivationNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng) : MKLDNNNode(layer, eng) {}
+MKLDNNActivationNode::MKLDNNActivationNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket) : MKLDNNNode(layer, eng, socket) {}
 
 void MKLDNNActivationNode::getSupportedDescriptors() {
     if (!descs.empty())
         return;
 
     if (getParentEdges().size() != 1)
-        THROW_IE_EXCEPTION << "Incorrect number of input edges.";
+        THROW_IE_EXCEPTION << "Incorrect number of input edges for layer " << getName();
     if (!getChildEdges().size())
-        THROW_IE_EXCEPTION << "Incorrect number of output edges.";
+        THROW_IE_EXCEPTION << "Incorrect number of output edges for layer " << getName();
 
     auto parentOutDims = getParentEdgeAt(0)->getDims();
 
     InferenceEngine::Precision precision = getCnnLayer()->insData[0].lock()->getPrecision();
-    if (precision != InferenceEngine::Precision::FP32)
-        precision = InferenceEngine::Precision::FP32;
+
     // FIXME: MKLDNN doesn't support not inputs with number of dimensions less than 4 for activation
     while (parentOutDims.ndims() < 4)
         parentOutDims.push_back(1);
@@ -106,9 +117,9 @@ void MKLDNNActivationNode::createPrimitive() {
     if (prim)
         return;
 
-    auto prim_desc = createPrimitiveDescriptor<relu_forward::primitive_desc, relu_forward::desc>();
+    auto prim_desc = createPrimitiveDescriptor<eltwise_forward::primitive_desc, eltwise_forward::desc>();
 
-    prim.reset(new relu_forward(prim_desc, getParentEdgeAt(0)->getMemory().GetPrimitive(),
+    prim.reset(new eltwise_forward(prim_desc, getParentEdgeAt(0)->getMemory().GetPrimitive(),
                                 getChildEdgeAt(0)->getMemory().GetPrimitive()));
 }
 

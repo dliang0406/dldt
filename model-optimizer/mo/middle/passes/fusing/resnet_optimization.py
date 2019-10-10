@@ -1,16 +1,25 @@
+"""
+ Copyright (c) 2018-2019 Intel Corporation
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+"""
+
 import logging as log
 
-import networkx as nx
 import numpy as np
 
-from mo.front.extractor import add_attrs_props
-from mo.graph.graph import Node, unique_id, dump_graph_for_graphviz
-from mo.middle.pattern_match import apply_pattern
-from mo.front.extractor import update_ie_fields
-from mo.middle.passes.fusing.helpers import backward_bfs, get_next_operation
-from mo.utils.graph import pseudo_topological_sort
-from mo.middle.passes.infer import partial_infer
-from mo.front.common.partial_infer.pooling import pool_explicit_padding_infer
+from mo.graph.graph import Node, Graph
+from mo.middle.passes.fusing.helpers import get_next_operation
 from mo.ops.pooling import Pooling
 
 
@@ -21,7 +30,7 @@ def _clean_fw_tensor_attrs(node: Node):
             node[attr] = None
 
 
-def _insert_pooling(graph: nx.MultiDiGraph, first_node: Node, second_node: Node, spatial_dims):
+def _insert_pooling(graph: Graph, first_node: Node, second_node: Node, spatial_dims):
     """
     This function inserts point wise pooling layer between two nodes
     """
@@ -34,7 +43,7 @@ def _insert_pooling(graph: nx.MultiDiGraph, first_node: Node, second_node: Node,
     pooling = Pooling(graph, dict(name='Pooling_', spatial_dims=spatial_dims, window=np.array([1, 1, 1, 1]),
                                   output_spatial_shape=None,
                                   stride=np.array(stride_prop), pad_spatial_shape=np.array([[0, 0], [0, 0]]),
-                                  pad=np.array([[0, 0], [0, 0], [0, 0], [0, 0]]), pool_method='avg',
+                                  pad=np.array([[0, 0], [0, 0], [0, 0], [0, 0]]), pool_method='max',
                                   is_partial_inferred=False))
     pooling_data = pooling.create_node_with_data([first_node])
 
@@ -59,7 +68,7 @@ def _check_next_ops(next_ops: list):
     return stride_props, status
 
 
-def _simple_stride_prop(graph: nx.MultiDiGraph, node: Node, spatial_dims, supported=True):
+def _simple_stride_prop(graph: Graph, node: Node, spatial_dims, supported=True):
     """
     This function handles stride propagation for op nodes. If node is in supported ops dict so this is supported operation and we
     can propagate stride directly via this op (stride_prop will be set by using bottom stride_prop), otherwise we can't and
@@ -88,7 +97,7 @@ def _simple_stride_prop(graph: nx.MultiDiGraph, node: Node, spatial_dims, suppor
     _clean_fw_tensor_attrs(node.out_node())
 
 
-def _conv_stride_prop(graph: nx.MultiDiGraph, node: Node, spatial_dims, supported=True):
+def _conv_stride_prop(graph: Graph, node: Node, spatial_dims, supported=True):
     """
     This function handles convolution stride propagation. There is two cases: conv->(op) and conv->conv. In first case
     we propagate stride from op, and in second case we also change stride for second conv
@@ -113,6 +122,7 @@ def _conv_stride_prop(graph: nx.MultiDiGraph, node: Node, spatial_dims, supporte
             if op.soft_get('has_stride') == True:
                 op.stride = np.array([1, 1, 1, 1])
         node['is_partial_inferred'] = False
+        node['output_spatial_shape'] = False
         _clean_fw_tensor_attrs(node.out_node())
 
     # If Convolution is valid then set `stride_prop` to Convolution stride
@@ -121,16 +131,19 @@ def _conv_stride_prop(graph: nx.MultiDiGraph, node: Node, spatial_dims, supporte
 
 supported_ops = {
     'ReLU': {'stride_prop': _simple_stride_prop, 'attrs': {}},
-    'Eltwise': {'stride_prop': _simple_stride_prop, 'attrs': {}},
+    'Maximum': {'stride_prop': _simple_stride_prop, 'attrs': {}},
+    'Mul': {'stride_prop': _simple_stride_prop, 'attrs': {}},
+    'Add': {'stride_prop': _simple_stride_prop, 'attrs': {}},
     'Convolution': {'stride_prop': _conv_stride_prop, 'attrs': {'has_stride': True}},
 }
 
 
-def _stride_propagation(graph: nx.MultiDiGraph, spatial_dims):
+def _stride_propagation(graph: Graph, spatial_dims):
     """
     This function do stride propagation for all op nodes
     """
-    nodes = [Node(graph, x) for x in pseudo_topological_sort(graph, reverse=True) if Node(graph, x).kind == 'op']
+    nodes = [node for node in graph.pseudo_topological_sort(reverse=True) if
+             node.kind == 'op' and node.soft_get('type') != 'Const']
 
     for node in nodes:
         if node.soft_get('type') in supported_ops:
@@ -143,7 +156,7 @@ def _stride_propagation(graph: nx.MultiDiGraph, spatial_dims):
             _simple_stride_prop(graph, node, spatial_dims, False)
 
 
-def stride_optimization(graph: nx.MultiDiGraph):
+def stride_optimization(graph: Graph):
     """
     This is main function for stride optimization pass
     """
@@ -157,7 +170,7 @@ def stride_optimization(graph: nx.MultiDiGraph):
         return
     _stride_propagation(graph, spatial_dims)
 
-    nodes = [Node(graph, x) for x in pseudo_topological_sort(graph) if
-             Node(graph, x).soft_get('is_partial_inferred') == False]
+    nodes = [node for node in graph.pseudo_topological_sort() if
+             node.soft_get('is_partial_inferred') == False]
     for node in nodes:
         node.infer(node)

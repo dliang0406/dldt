@@ -1,12 +1,10 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include <gtest/gtest.h>
 #include <gmock/gmock-spec-builders.h>
 #include "mkldnn_plugin/mkldnn_graph.h"
-#include "mock_mkldnn_primitive.hpp"
 
 #include "test_graph.hpp"
 
@@ -162,11 +160,12 @@ protected:
                               nodes[i]->getSelectedPrimitiveDescriptor()->getImplementationType() & p.selectedType);
                 }
             }
-            ASSERT_EQ(3, nodes.size());
+            if (nodes.size() != 3 && nodes.size() != 5)
+                FAIL() << "Nodes amount should be 3 or 5 (in reorder case)";
 
             InferenceEngine::SizeVector dims_src = {p.in.n, p.in.c, p.in.h, p.in.w};
 
-            InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src);
+            InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src, InferenceEngine::NCHW});
             src->allocate();
             fill_data(src->buffer(), src->size());
 
@@ -261,7 +260,7 @@ protected:
 
             InferenceEngine::SizeVector dims_src = {MB, p.in.c, p.in.h, p.in.w};
 
-            InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src);
+            InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src, InferenceEngine::NCHW});
             src->allocate();
             fill_data(src->buffer(), src->size());
 

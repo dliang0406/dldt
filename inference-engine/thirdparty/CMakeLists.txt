@@ -1,24 +1,62 @@
-# Copyright (C) 2018 Intel Corporation
+# Copyright (C) 2018-2019 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 #
-add_subdirectory(pugixml)
-add_subdirectory(stb_lib)
-add_subdirectory(ade)
 
-if (ENABLE_CLDNN AND ENABLE_CLDNN_BUILD)
-    include(CheckCXXCompilerFlag)
-    CHECK_CXX_COMPILER_FLAG("-std=c++14" COMPILER_SUPPORTS_CXX14)
-    if(NOT COMPILER_SUPPORTS_CXX14)
-        message(FATAL_ERROR "Compiler should support C++14 for clDNN building. Please update compiler.")
-    endif()
-    set(CLDNN__OUTPUT_DIR ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
-    set(CLDNN__INCLUDE_TESTS OFF CACHE BOOL "" FORCE)
-    set(CLDNN__INCLUDE_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(CLDNN__INCLUDE_TUTORIAL OFF CACHE BOOL "" FORCE)
-    set(CLDNN__INCLUDE_GENERIC_SAMPLE OFF CACHE BOOL "" FORCE)
-    remove_definitions(-fvisibility=default)
-    add_subdirectory(clDNN)
-    add_definitions(-fvisibility=default)
+if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unknown-warning-option -Wno-inconsistent-missing-override -Wno-pass-failed")
+  set(CMAKE_CC_FLAGS "${CMAKE_CC_FLAGS} -Wno-unknown-warning-option -Wno-inconsistent-missing-override -Wno-pass-failed")
 endif()
 
-include(mkldnn.cmake)
+if (ENABLE_CLDNN)
+    set(CLDNN__OUTPUT_BIN_DIR ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+    set(CLDNN__OUTPUT_LIB_DIR ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
+    if (ENABLE_TESTS AND ENABLE_CLDNN_TESTS)
+        set(CLDNN__INCLUDE_TESTS ON CACHE BOOL "" FORCE)
+        set(CLDNN__INCLUDE_CORE_INTERNAL_TESTS ON CACHE BOOL "" FORCE)
+    else()
+        set(CLDNN__INCLUDE_TESTS OFF CACHE BOOL "" FORCE)
+        set(CLDNN__INCLUDE_CORE_INTERNAL_TESTS OFF CACHE BOOL "" FORCE)
+    endif()
+    set(CLDNN__INCLUDE_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(CLDNN__INCLUDE_TUTORIAL OFF CACHE BOOL "" FORCE)
+    if (WIN32)
+        set(CLDNN__ARCHITECTURE_TARGET "Windows64" CACHE STRING "" FORCE)
+    else()
+        set(CLDNN__ARCHITECTURE_TARGET "Linux64" CACHE STRING "" FORCE)
+    endif()
+
+    add_subdirectory(clDNN)
+endif()
+
+function(build_with_lto)
+    if(ENABLE_LTO)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flto")
+        set(CMAKE_AR  "gcc-ar")
+        set(CMAKE_RANLIB "gcc-ranlib")
+    endif()
+
+    add_subdirectory(pugixml)
+    export(TARGETS pugixml NAMESPACE IE:: APPEND FILE "${CMAKE_BINARY_DIR}/targets.cmake")
+    export(TARGETS pugixml NAMESPACE IE:: APPEND FILE "${CMAKE_BINARY_DIR}/targets_developer.cmake")
+
+    if (TARGET pugixml_mt)
+        export(TARGETS pugixml_mt NAMESPACE IE:: APPEND FILE "${CMAKE_BINARY_DIR}/targets.cmake")
+        export(TARGETS pugixml_mt NAMESPACE IE:: APPEND FILE "${CMAKE_BINARY_DIR}/targets_developer.cmake")
+    endif()
+
+    add_subdirectory(stb_lib)
+
+    add_subdirectory(ade)
+    export(TARGETS ade NAMESPACE IE:: APPEND FILE "${CMAKE_BINARY_DIR}/targets_developer.cmake")
+
+    include(ngraph.cmake)
+
+    add_subdirectory(fluid/modules/gapi)
+    export(TARGETS fluid NAMESPACE IE:: APPEND FILE "${CMAKE_BINARY_DIR}/targets_developer.cmake")
+endfunction()
+
+build_with_lto()
+
+if(ENABLE_MKL_DNN)
+    include(mkldnn.cmake)
+endif()

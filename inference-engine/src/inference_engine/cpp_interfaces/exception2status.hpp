@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -27,6 +26,21 @@ try {x; return OK;\
 } catch (...) {\
     return InferenceEngine::DescriptionBuffer(UNEXPECTED);\
 }
+/**
+ * convert exception to status variable
+ */
+#define TO_STATUSVAR(x, statusVar, descBufferVar)\
+do {\
+try {x; statusVar = OK;\
+} catch (const InferenceEngine::details::InferenceEngineException & iex) { \
+    statusVar = InferenceEngine::DescriptionBuffer((iex.hasStatus() ? iex.getStatus() : GENERAL_ERROR), \
+            descBufferVar) << iex.what(); \
+} catch (const std::exception & ex) {\
+    statusVar = InferenceEngine::DescriptionBuffer(GENERAL_ERROR, descBufferVar) << ex.what();\
+} catch (...) {\
+    statusVar = InferenceEngine::DescriptionBuffer(UNEXPECTED);\
+}\
+}while(false)
 
 #define TO_STATUS_NO_RESP(x)\
 try {x; return OK;\

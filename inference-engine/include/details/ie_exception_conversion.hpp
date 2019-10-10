@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -68,6 +67,7 @@ inline void extract_exception(StatusCode status, char *msg) {
         case RESULT_NOT_READY:throw ResultNotReady(msg);
         case NOT_ALLOCATED:throw NotAllocated(msg);
         case INFER_NOT_STARTED:throw InferNotStarted(msg);
+        case NETWORK_NOT_READ:throw NetworkNotRead(msg);
         default:THROW_IE_EXCEPTION << msg;
     }
 }

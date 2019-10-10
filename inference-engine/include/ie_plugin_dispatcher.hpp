@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -13,105 +12,55 @@
 #include <string>
 #include <vector>
 #include <cpp/ie_plugin_cpp.hpp>
+#include <multi-device/multi_device_config.hpp>
 
 namespace InferenceEngine {
 /**
 * @brief This is a class to load a suitable plugin
 */
-class PluginDispatcher {
+class INFERENCE_ENGINE_API_CLASS(PluginDispatcher) {
 public:
     /**
      * @brief A constructor
      * @param pp Vector of paths to plugin directories
      */
-    explicit PluginDispatcher(const std::vector<std::string> &pp) : pluginDirs(pp) {}
+    explicit PluginDispatcher(const std::vector<file_name_t> &pp = {file_name_t()});
 
     /**
-    * @brief Loads a plugin from plugin directories
-    * @param name Plugin name
-    * @return A pointer to the loaded plugin
-    */
-    virtual InferencePlugin getPluginByName(const std::string& name) const {
-        std::stringstream err;
-        for (auto &pluginPath : pluginDirs) {
-            try {
-                return InferencePlugin(InferenceEnginePluginPtr(make_plugin_name(pluginPath, name)));
-            }
-            catch (const std::exception &ex) {
-                err << "cannot load plugin: " << name << " from " << pluginPath << ": " << ex.what() << ", skipping\n";
-            }
-        }
-        THROW_IE_EXCEPTION << "Plugin " << name << " cannot be loaded: " << err.str() << "\n";
-    }
+     * @brief Loads a plugin from plugin directories
+     * @param name Plugin name
+     * @return A pointer to the loaded plugin
+     */
+    virtual InferencePlugin getPluginByName(const file_name_t& name) const;
 
     /**
-    * @brief Loads a plugin from directories that is suitable for the device string
-    * @return A pointer to the plugin
-    */
-    InferencePlugin getPluginByDevice(const std::string& deviceName) const {
-        InferenceEnginePluginPtr ptr;
-        // looking for HETERO: if can find, add everything after ':' to the options of hetero plugin
-        if (deviceName.find("HETERO:") == 0) {
-            ptr = getSuitablePlugin(InferenceEngine::TargetDeviceInfo::fromStr("HETERO"));
-            if (ptr) {
-                InferenceEngine::ResponseDesc response;
-                ptr->SetConfig({ { "TARGET_FALLBACK", deviceName.substr(7, deviceName.length() - 7) } }, &response);
-            }
-        } else {
-            ptr = getSuitablePlugin(InferenceEngine::TargetDeviceInfo::fromStr(deviceName));
-        }
-        return InferencePlugin(ptr);
-    }
+     * @deprecated Use InferenceEngine::Core to work with devices by name
+     * @brief Loads a plugin from directories that is suitable for the device string
+     * @param deviceName A string value representing target device
+     * @return A pointer to the plugin
+     */
+    INFERENCE_ENGINE_DEPRECATED
+    InferencePlugin getPluginByDevice(const std::string& deviceName) const;
 
     /**
-    * @brief Loads a plugin from directories that is suitable for the device
-    * @return A pointer to the plugin
-    */
-    InferenceEnginePluginPtr getSuitablePlugin(TargetDevice device) const {
-        FindPluginResponse result;
-        ResponseDesc desc;
-        if (InferenceEngine::OK != findPlugin({ device }, result, &desc)) {
-            THROW_IE_EXCEPTION << desc.msg;
-        }
-
-        std::stringstream err;
-        for (std::string& name : result.names) {
-            try {
-                return getPluginByName(name);
-            }
-            catch (const std::exception &ex) {
-                err << "Tried load plugin : " << name << ",  error: " << ex.what() << "\n";
-            }
-        }
-        THROW_IE_EXCEPTION << "Cannot find plugin to use :" << err.str() << "\n";
-    }
+     * @deprecated Use InferenceEngine::Core to work with devices by name
+     * @brief Loads a plugin from directories that is suitable for the device
+     * @param device An instance of InferenceEngine::TargetDevice
+     * @return A pointer to the plugin
+     */
+    INFERENCE_ENGINE_DEPRECATED
+    InferenceEnginePluginPtr getSuitablePlugin(TargetDevice device) const;
 
 protected:
     /**
-    * @brief Creates path to the plugin
-    * @param path Path to the plugin
-    * @param input Plugin name
-    * @return The path to the plugin
-    */
-    std::string make_plugin_name(const std::string &path, const std::string &input) const {
-        std::string separator =
-#if defined _WIN32 || defined __CYGWIN__
-        "\\";
-#else
-        "/";
-#endif
-        if (path.empty())
-            separator = "";
-#ifdef _WIN32
-        return path + separator + input + ".dll";
-#elif __APPLE__
-        return path + separator + "lib" + input + ".dylib";
-#else
-        return path + separator + "lib" + input + ".so";
-#endif
-    }
+     * @brief Creates path to the plugin
+     * @param path Path to the plugin
+     * @param input Plugin name
+     * @return The path to the plugin
+     */
+    file_name_t make_plugin_name(const file_name_t &path, const file_name_t &input) const;
 
 private:
-    std::vector<std::string> pluginDirs;
+    std::vector<file_name_t> pluginDirs;
 };
 }  // namespace InferenceEngine

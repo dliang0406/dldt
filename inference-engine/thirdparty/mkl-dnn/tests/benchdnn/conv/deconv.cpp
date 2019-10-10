@@ -21,6 +21,8 @@
 
 #include "mkldnn.h"
 
+#include "src/common/mkldnn_thread.hpp"
+
 #include "mkldnn_common.hpp"
 #include "mkldnn_memory.hpp"
 
@@ -31,94 +33,101 @@ using namespace conv;
 
 namespace deconv {
 
-inline static void swap(int &a, int &b)
-{
-    int temp = a;
+template <typename T>
+inline static void swap(T &a, T &b) {
+    T temp = a;
     a = b;
     b = temp;
 }
-inline bool is_deconv_3d(const prb_t *p)
-{
-    return (p->id > 1) ? 1 : 0;
+
+inline bool is_deconv_3d(const prb_t *p) {
+    return p->id > 1;
+}
+
+inline bool is_deconv_1d(const prb_t *p) {
+    return !is_deconv_3d(p) && p->ih == 1 && p->kh == 1;
 }
 
 inline int transpose_data_wei(const prb_t *p, dnn_mem_t &wei, dnn_mem_t &wei_tr) {
-#   pragma omp parallel for collapse(5)
-    for (int g = 0; g < p->g; ++g)
-    for (int oc = 0; oc < p->oc / p->g; ++oc)
-    for (int ic = 0; ic < p->ic / p->g; ++ic)
-    for (int kd = 0; kd < p->kd; ++kd)
-    for (int kh = 0; kh < p->kh; ++kh)
-    for (int kw = 0; kw < p->kw; ++kw)
-    {
+    mkldnn::impl::parallel_nd(
+        p->g, p->oc / p->g, p->ic / p->g, p->kd, p->kh, p->kw,
+        [&](int g, int oc, int ic, int kd, int kh, int kw) {
         size_t idx = (((((size_t)g * p->ic / p->g + ic) * p->oc / p->g + oc)
         * p->kd + kd) * p->kh + kh) * p->kw + kw;
         ((float*)wei_tr)[idx] = ((float*)wei)[wei_off_f(p, g, oc, ic, kd, kh, kw)];
-    }
+    });
 
     return OK;
 }
 
 inline int init_pd(const prb_t *p, mkldnn_deconvolution_desc_t &cd,
         mkldnn_primitive_desc_t &dpd, res_t *r) {
-    int ndims = is_deconv_3d(p) ? 5 : 4;
+    int ndims = is_deconv_3d(p) ? 5 : is_deconv_1d(p) ? 3 : 4;
 
     mkldnn_memory_desc_t src_d, wei_d, bia_d, dst_d;
-    mkldnn_dims_t src_dims = {p->mb, p->ic, p->ih, p->iw};
+    mkldnn_dims_t src_1d_dims = {p->mb, p->ic, p->iw};
+    mkldnn_dims_t src_2d_dims = {p->mb, p->ic, p->ih, p->iw};
     mkldnn_dims_t src_3d_dims = {p->mb, p->ic, p->id, p->ih, p->iw};
-    mkldnn_dims_t wei_dims = {p->g, p->oc / p->g, p->ic / p->g, p->kh, p->kw};
+    mkldnn_dims_t wei_1d_dims = {p->g, p->oc / p->g, p->ic / p->g, p->kw};
+    mkldnn_dims_t wei_2d_dims = {p->g, p->oc / p->g, p->ic / p->g, p->kh, p->kw};
     mkldnn_dims_t wei_3d_dims = {p->g, p->oc / p->g, p->ic / p->g, p->kd, p->kh, p->kw};
     mkldnn_dims_t bia_dims = {p->oc};
-    mkldnn_dims_t dst_dims = {p->mb, p->oc, p->oh, p->ow};
+    mkldnn_dims_t dst_1d_dims = {p->mb, p->oc, p->ow};
+    mkldnn_dims_t dst_2d_dims = {p->mb, p->oc, p->oh, p->ow};
     mkldnn_dims_t dst_3d_dims = {p->mb, p->oc, p->od, p->oh, p->ow};
-
-    assert(p->cfg[SRC].dt == p->cfg[DST].dt);
-
     DNN_SAFE(mkldnn_memory_desc_init(&src_d, ndims,
-        is_deconv_3d(p) ? src_3d_dims : src_dims, p->cfg[SRC].dt, mkldnn_any), WARN);
-    DNN_SAFE(mkldnn_memory_desc_init(&wei_d, ndims + 1,
-        is_deconv_3d(p) ? wei_3d_dims : wei_dims, p->cfg[WEI].dt, mkldnn_any), WARN);
+        is_deconv_3d(p) ? src_3d_dims : is_deconv_1d(p) ? src_1d_dims : src_2d_dims,
+        p->cfg[SRC].dt, mkldnn_any),
+            WARN);
+    DNN_SAFE(mkldnn_memory_desc_init(&wei_d, ndims + p->has_groups,
+        is_deconv_3d(p)
+        ? &wei_3d_dims[!p->has_groups]
+        : is_deconv_1d(p)
+        ? &wei_1d_dims[!p->has_groups]
+        : &wei_2d_dims[!p->has_groups],
+        p->cfg[WEI].dt, mkldnn_any), WARN);
     DNN_SAFE(mkldnn_memory_desc_init(&bia_d, 1, bia_dims, p->cfg[BIA].dt, mkldnn_any), WARN);
     DNN_SAFE(mkldnn_memory_desc_init(&dst_d, ndims,
-        is_deconv_3d(p) ? dst_3d_dims : dst_dims, p->cfg[DST].dt, mkldnn_any), WARN);
-    int strides_2d[] = {p->sh, p->sw};
-    int padding_2d[] = {p->ph, p->pw};
-    int strides_3d[] = {p->sd, p->sh, p->sw};
-    int padding_3d[] = {p->pd, p->ph, p->pw};
+        is_deconv_3d(p) ? dst_3d_dims : is_deconv_1d(p) ? dst_1d_dims : dst_2d_dims,
+        p->cfg[DST].dt, mkldnn_any), WARN);
+
+    ptrdiff_t strides_nd[] = {p->sd, p->sh, p->sw};
+    ptrdiff_t dilates_nd[] = {p->dd, p->dh, p->dw};
+    ptrdiff_t padding_nd[] = {p->pd, p->ph, p->pw};
 
     auto bph = [&](int ih, int oh, int kh, int sh, int ph, int dh) {
         return (oh - 1) * sh - ih + ((kh - 1) * (dh + 1) + 1) - ph;
     };
-    int padding_r_3d[] = {
+
+    ptrdiff_t padding_r_nd[] = {
         bph(p->od, p->id, p->kd, p->sd, p->pd, p->dd),
         bph(p->oh, p->ih, p->kh, p->sh, p->ph, p->dh),
         bph(p->ow, p->iw, p->kw, p->sw, p->pw, p->dw)};
-    int padding_r_2d[] = {
-        bph(p->oh, p->ih, p->kh, p->sh, p->ph, p->dh),
-        bph(p->ow, p->iw, p->kw, p->sw, p->pw, p->dw)};
 
-    int *strides = is_deconv_3d(p) ? strides_3d : strides_2d;
-    int *padding = is_deconv_3d(p) ? padding_3d : padding_2d;
-    int *padding_r = is_deconv_3d(p) ? padding_r_3d : padding_r_2d;
+    ptrdiff_t *strides = strides_nd + (5 - ndims);
+    ptrdiff_t *dilates = dilates_nd + (5 - ndims);
+    ptrdiff_t *padding = padding_nd + (5 - ndims);
+    ptrdiff_t *padding_r = padding_r_nd + (5 - ndims);
+
     mkldnn_alg_kind_t alg = mkldnn_deconvolution_direct;
     if (p->alg == WINO) alg = mkldnn_deconvolution_winograd;
 
     switch (p->dir) {
     case FWD_D: case FWD_B:
-        DNN_SAFE(mkldnn_deconvolution_forward_desc_init(&cd,
+        DNN_SAFE(mkldnn_dilated_deconvolution_forward_desc_init(&cd,
                     mkldnn_forward_inference, alg, &src_d, &wei_d,
                     p->dir == FWD_D ? NULL : &bia_d, &dst_d, strides,
-                    padding, padding_r, mkldnn_padding_zero), WARN);
+                    dilates, padding, padding_r, mkldnn_padding_zero), WARN);
         break;
     case BWD_D:
-        DNN_SAFE(mkldnn_deconvolution_backward_data_desc_init(&cd, alg,
-                    &src_d, &wei_d, &dst_d, strides, padding,
+        DNN_SAFE(mkldnn_dilated_deconvolution_backward_data_desc_init(&cd, alg,
+                    &src_d, &wei_d, &dst_d, strides, dilates, padding,
                     padding_r, mkldnn_padding_zero), WARN);
         break;
     case BWD_W: case BWD_WB:
-        DNN_SAFE(mkldnn_deconvolution_backward_weights_desc_init(&cd,
+        DNN_SAFE(mkldnn_dilated_deconvolution_backward_weights_desc_init(&cd,
                     alg, &src_d, &wei_d, p->dir == BWD_W ? NULL : &bia_d,
-                    &dst_d, strides,  padding, padding_r,
+                    &dst_d, strides, dilates,  padding, padding_r,
                     mkldnn_padding_zero), WARN);
         break;
     default: DNN_SAFE(mkldnn_invalid_arguments, CRIT);
@@ -184,7 +193,7 @@ int doit(const prb_t *p, res_t *r) {
     *r = res_zero;
     bool with_groups = 1;
 
-    prb_t p_tr((desc_t)*p, p->dir, p->cfg, p->alg, p->merge, p->attr, p->mb);
+    prb_t p_tr((desc_t)*p, p->dir, p->cfg, p->alg, p->attr, p->mb, true);
     swap(p_tr.ic,  p_tr.oc);
     swap(p_tr.ih,  p_tr.oh);
     swap(p_tr.id,  p_tr.od);
@@ -212,8 +221,9 @@ int doit(const prb_t *p, res_t *r) {
         ? new dnn_mem_t(bia_dt_d, p->cfg[BIA].dt) : new dnn_mem_t();
     dnn_mem_t &bia_dt = *p_bia_dt;
 
-    auto src_format = is_deconv_3d(p) ? mkldnn_ncdhw : mkldnn_nchw;
-    auto wei_format = is_deconv_3d(p) ? mkldnn_goidhw : mkldnn_goihw;
+    auto src_format = get_default_format(src_dt.md_.ndims, DATA);
+    auto wei_format = get_default_format(wei_dt.md_.ndims,
+        p->has_groups ? GWEI : WEI);
 
     const auto fp = mkldnn_f32;
 
@@ -228,9 +238,9 @@ int doit(const prb_t *p, res_t *r) {
     dnn_mem_t &bia_fp = *p_bia_fp, &zero_fp = *p_zero_fp;
 
     /* fill memory + reorders <-> */
-    SAFE(fill_src(&p_tr, dst_dt, dst_fp, r), WARN);
+    SAFE(fill_dst(p, dst_dt, dst_fp, r), WARN);
     SAFE(fill_wei(p, wei_dt, wei_fp, r), WARN);
-    SAFE(fill_dst(&p_tr, src_dt, src_fp, r), WARN);
+    SAFE(fill_src(p, src_dt, src_fp, r), WARN);
 
     SAFE(transpose_data_wei(p, wei_fp, wei_tr_fp), WARN);
     if (p->dir & FLAG_BIA)
@@ -243,13 +253,9 @@ int doit(const prb_t *p, res_t *r) {
         DNN_SAFE(mkldnn_primitive_create(&c, dpd, inputs, outputs), WARN);
         SAFE(execute(c), WARN);
         if (bench_mode & CORR) {
-            compute_ref_bwd_d(&p_tr, dst_fp, wei_tr_fp, src_fp);
+            compute_ref_bwd_d(&p_tr, dst_fp, wei_tr_fp, bia_fp, src_fp);
             dnn_mem_t dst(dst_dt, fp, src_format);
-            SAFE(dst.reorder(dst_dt), WARN);
-            if (p->dir & FLAG_BIA) {
-                compute_bias_fwd(p, bia_fp, dst_fp);
-            }
-           SAFE(compare_dst(p, dst, dst_fp, r, true), WARN);
+            SAFE(compare_dst(p, dst, dst_fp, r, true), WARN);
         }
     } else if (p->dir == BWD_D) {
         mkldnn_primitive_at_t inputs[3] = { {dst_dt.p_, 0}, {wei_dt.p_, 0}, };
@@ -259,7 +265,6 @@ int doit(const prb_t *p, res_t *r) {
         if (bench_mode & CORR) {
             compute_ref_fwd(&p_tr, dst_fp, wei_tr_fp, zero_fp, src_fp);
             dnn_mem_t src(src_dt, fp, src_format);
-            SAFE(src.reorder(src_dt), WARN);
             SAFE(compare_src(p, src, src_fp, r, true), WARN);
         }
     } else if (p->dir & FLAG_BWD && p->dir & FLAG_WEI) {
@@ -273,12 +278,10 @@ int doit(const prb_t *p, res_t *r) {
             compute_ref_bwd_weights(&p_tr, dst_fp, wei_tr_fp, src_fp);
             transpose_data_wei(&p_tr, wei_tr_fp, wei_fp);
             dnn_mem_t wei(wei_dt, fp, wei_format);
-            SAFE(wei.reorder(wei_dt), WARN);
             SAFE(compare_wei(&p_tr, wei, wei_fp, r, true), WARN);
             if (p->dir & FLAG_BIA) {
                 compute_ref_bwd_bias(p, bia_fp, dst_fp);
                 dnn_mem_t bia(bia_dt, fp, mkldnn_x);
-                SAFE(bia.reorder(bia_dt), WARN);
                 SAFE(compare_bia(p, bia, bia_fp, r, true), WARN);
             }
         }
@@ -303,6 +306,9 @@ int doit(const prb_t *p, res_t *r) {
             if (stop) break;
         }
     }
+
+    DNN_SAFE_V(mkldnn_primitive_destroy(c));
+    DNN_SAFE_V(mkldnn_primitive_desc_destroy(dpd));
 
     delete p_bia_dt;
     delete p_bia_fp;

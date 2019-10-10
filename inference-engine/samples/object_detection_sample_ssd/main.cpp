@@ -1,31 +1,14 @@
-/*
-// Copyright (c) 2018 Intel Corporation
+// Copyright (C) 2018-2019 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-*/
 
 #include <gflags/gflags.h>
-#include <functional>
 #include <iostream>
-#include <fstream>
-#include <random>
 #include <string>
 #include <memory>
 #include <vector>
-#include <time.h>
-#include <limits>
-#include <chrono>
 #include <algorithm>
+#include <map>
 
 #include <format_reader_ptr.h>
 #include <inference_engine.hpp>
@@ -34,23 +17,26 @@
 #include <samples/common.hpp>
 #include <samples/slog.hpp>
 #include <samples/args_helper.hpp>
+
+#include <vpu/vpu_tools_common.hpp>
+#include <vpu/vpu_plugin_config.hpp>
+
 #include "object_detection_sample_ssd.h"
 
 using namespace InferenceEngine;
 
+ConsoleErrorListener error_listener;
+
 bool ParseAndCheckCommandLine(int argc, char *argv[]) {
     // ---------------------------Parsing and validation of input args--------------------------------------
-    slog::info << "Parsing input parameters" << slog::endl;
-
     gflags::ParseCommandLineNonHelpFlags(&argc, &argv, true);
     if (FLAGS_h) {
         showUsage();
+        showAvailableDevices();
         return false;
     }
 
-    if (FLAGS_ni < 1) {
-        throw std::logic_error("Parameter -ni should be greater than 0 (default: 1)");
-    }
+    slog::info << "Parsing input parameters" << slog::endl;
 
     if (FLAGS_i.empty()) {
         throw std::logic_error("Parameter -i is not set");
@@ -61,6 +47,12 @@ bool ParseAndCheckCommandLine(int argc, char *argv[]) {
     }
 
     return true;
+}
+
+static std::map<std::string, std::string> configure(const std::string& confFileName) {
+    auto config = parseConfig(confFileName);
+
+    return config;
 }
 
 /**
@@ -82,13 +74,20 @@ int main(int argc, char *argv[]) {
         // --------------------------- 2. Read input -----------------------------------------------------------
         /** This vector stores paths to the processed images **/
         std::vector<std::string> images;
-        parseImagesArguments(images);
+        parseInputFilesArguments(images);
         if (images.empty()) throw std::logic_error("No suitable images were found");
         // -----------------------------------------------------------------------------------------------------
 
-        // --------------------------- 3. Load Plugin for inference engine -------------------------------------
-        slog::info << "Loading plugin" << slog::endl;
-        InferencePlugin plugin = PluginDispatcher({ FLAGS_pp, "../../../lib/intel64" , "" }).getPluginByDevice(FLAGS_d);
+        // --------------------------- 3. Load inference engine -------------------------------------
+        slog::info << "Loading Inference Engine" << slog::endl;
+        Core ie;
+
+        slog::info << "Device info: " << slog::endl;
+        std::cout << ie.GetVersions(FLAGS_d);
+
+        if (FLAGS_p_msg) {
+            ie.SetLogCallback(error_listener);
+        }
 
         /*If CPU device, load default library with extensions that comes with the product*/
         if (FLAGS_d.find("CPU") != std::string::npos) {
@@ -97,29 +96,21 @@ int main(int argc, char *argv[]) {
             * custom MKLDNNPlugin layer implementations. These layers are not supported
             * by mkldnn, but they can be useful for inferring custom topologies.
             **/
-            plugin.AddExtension(std::make_shared<Extensions::Cpu::CpuExtensions>());
+            ie.AddExtension(std::make_shared<Extensions::Cpu::CpuExtensions>(), "CPU");
         }
 
         if (!FLAGS_l.empty()) {
             // CPU(MKLDNN) extensions are loaded as a shared library and passed as a pointer to base extension
             IExtensionPtr extension_ptr = make_so_pointer<IExtension>(FLAGS_l);
-            plugin.AddExtension(extension_ptr);
+            ie.AddExtension(extension_ptr, "CPU");
             slog::info << "CPU Extension loaded: " << FLAGS_l << slog::endl;
         }
 
         if (!FLAGS_c.empty()) {
             // clDNN Extensions are loaded from an .xml description and OpenCL kernel files
-            plugin.SetConfig({ { PluginConfigParams::KEY_CONFIG_FILE, FLAGS_c } });
+            ie.SetConfig({ { PluginConfigParams::KEY_CONFIG_FILE, FLAGS_c } }, "GPU");
             slog::info << "GPU Extension loaded: " << FLAGS_c << slog::endl;
         }
-
-        /** Setting plugin parameter for per layer metrics **/
-        if (FLAGS_pc) {
-            plugin.SetConfig({ { PluginConfigParams::KEY_PERF_COUNT, PluginConfigParams::YES } });
-        }
-
-        /** Printing plugin version **/
-        printPluginVersion(plugin, std::cout);
         // -----------------------------------------------------------------------------------------------------
 
         // --------------------------- 4. Read IR Generated by ModelOptimizer (.xml and .bin files) ------------
@@ -156,7 +147,7 @@ int main(int argc, char *argv[]) {
          */
         std::string imageInputName, imInfoInputName;
 
-        InputInfo::Ptr inputInfo = inputsInfo.begin()->second;
+        InputInfo::Ptr inputInfo = nullptr;
 
         SizeVector inputImageDims;
         /** Stores input image **/
@@ -166,6 +157,8 @@ int main(int argc, char *argv[]) {
             /** Working with first input tensor that stores image **/
             if (item.second->getInputData()->getTensorDesc().getDims().size() == 4) {
                 imageInputName = item.first;
+
+                inputInfo = item.second;
 
                 slog::info << "Batch size is " << std::to_string(networkReader.getNetwork().getBatchSize()) << slog::endl;
 
@@ -177,11 +170,14 @@ int main(int argc, char *argv[]) {
 
                 Precision inputPrecision = Precision::FP32;
                 item.second->setPrecision(inputPrecision);
-                if ((item.second->getTensorDesc().getDims()[1] != 3 && item.second->getTensorDesc().getDims()[1] != 6) ||
-                     item.second->getTensorDesc().getDims()[0] != 1) {
+                if ((item.second->getTensorDesc().getDims()[1] != 3 && item.second->getTensorDesc().getDims()[1] != 6)) {
                     throw std::logic_error("Invalid input info. Should be 3 or 6 values length");
                 }
             }
+        }
+
+        if (inputInfo == nullptr) {
+            inputInfo = inputsInfo.begin()->second;
         }
         // -----------------------------------------------------------------------------------------------------
 
@@ -193,7 +189,7 @@ int main(int argc, char *argv[]) {
         std::string outputName;
         DataPtr outputInfo;
         for (const auto& out : outputsInfo) {
-            if (out.second->creatorLayer.lock()->type == "DetectionOutput") {
+            if (out.second->getCreatorLayer().lock()->type == "DetectionOutput") {
                 outputName = out.first;
                 outputInfo = out.second;
             }
@@ -216,23 +212,25 @@ int main(int argc, char *argv[]) {
             throw std::logic_error("Incorrect output dimensions for SSD model");
         }
 
-        /** Set the precision of output data provided by the user, should be called before load of the network to the plugin **/
+        /** Set the precision of output data provided by the user, should be called before load of the network to the device **/
         outputInfo->setPrecision(Precision::FP32);
         // -----------------------------------------------------------------------------------------------------
 
-        // --------------------------- 7. Loading model to the plugin ------------------------------------------
-        slog::info << "Loading model to the plugin" << slog::endl;
-        ExecutableNetwork executable_network = plugin.LoadNetwork(network, {});
+        // --------------------------- 7. Loading model to the device ------------------------------------------
+        slog::info << "Loading model to the device" << slog::endl;
+
+        ExecutableNetwork executable_network = ie.LoadNetwork(network, FLAGS_d, configure(FLAGS_config));
         // -----------------------------------------------------------------------------------------------------
 
         // --------------------------- 8. Create infer request -------------------------------------------------
+        slog::info << "Create infer request" << slog::endl;
         InferRequest infer_request = executable_network.CreateInferRequest();
         // -----------------------------------------------------------------------------------------------------
 
         // --------------------------- 9. Prepare input --------------------------------------------------------
         /** Collect images data ptrs **/
         std::vector<std::shared_ptr<unsigned char>> imagesData, originalImagesData;
-        std::vector<int> imageWidths, imageHeights;
+        std::vector<size_t> imageWidths, imageHeights;
         for (auto & i : images) {
             FormatReader::ReaderPtr reader(i.c_str());
             if (reader.get() == nullptr) {
@@ -256,9 +254,8 @@ int main(int argc, char *argv[]) {
         if (batchSize != imagesData.size()) {
             slog::warn << "Number of images " + std::to_string(imagesData.size()) + \
                 " doesn't match batch size " + std::to_string(batchSize) << slog::endl;
-            slog::warn << std::to_string(std::min(imagesData.size(), batchSize)) + \
-                " images will be processed" << slog::endl;
             batchSize = std::min(batchSize, imagesData.size());
+            slog::warn << "Number of images to be processed is "<< std::to_string(batchSize) << slog::endl;
         }
 
         /** Creating input blob **/
@@ -292,7 +289,7 @@ int main(int argc, char *argv[]) {
             for (size_t image_id = 0; image_id < std::min(imagesData.size(), batchSize); ++image_id) {
                 p[image_id * imInfoDim + 0] = static_cast<float>(inputsInfo[imageInputName]->getTensorDesc().getDims()[2]);
                 p[image_id * imInfoDim + 1] = static_cast<float>(inputsInfo[imageInputName]->getTensorDesc().getDims()[3]);
-                for (int k = 2; k < imInfoDim; k++) {
+                for (size_t k = 2; k < imInfoDim; k++) {
                     p[image_id * imInfoDim + k] = 1.0f;  // all scale factors are set to 1.0
                 }
             }
@@ -300,22 +297,8 @@ int main(int argc, char *argv[]) {
         // -----------------------------------------------------------------------------------------------------
 
         // --------------------------- 10. Do inference ---------------------------------------------------------
-        slog::info << "Start inference (" << FLAGS_ni << " iterations)" << slog::endl;
-
-        typedef std::chrono::high_resolution_clock Time;
-        typedef std::chrono::duration<double, std::ratio<1, 1000>> ms;
-        typedef std::chrono::duration<float> fsec;
-
-        double total = 0.0;
-        /** Start inference & calc performance **/
-        for (int iter = 0; iter < FLAGS_ni; ++iter) {
-            auto t0 = Time::now();
-            infer_request.Infer();
-            auto t1 = Time::now();
-            fsec fs = t1 - t0;
-            ms d = std::chrono::duration_cast<ms>(fs);
-            total += d.count();
-        }
+        slog::info << "Start inference" << slog::endl;
+        infer_request.Infer();
         // -----------------------------------------------------------------------------------------------------
 
         // --------------------------- 11. Process output -------------------------------------------------------
@@ -329,36 +312,36 @@ int main(int argc, char *argv[]) {
 
         /* Each detection has image_id that denotes processed image */
         for (int curProposal = 0; curProposal < maxProposalCount; curProposal++) {
-            float image_id = detection[curProposal * objectSize + 0];
-            float label = detection[curProposal * objectSize + 1];
-            float confidence = detection[curProposal * objectSize + 2];
-            /* CPU and GPU plugins have difference in DetectionOutput layer, so we need both checks */
-            if (image_id < 0 || confidence == 0) {
-                continue;
+            auto image_id = static_cast<int>(detection[curProposal * objectSize + 0]);
+            if (image_id < 0) {
+                break;
             }
 
-            float xmin = detection[curProposal * objectSize + 3] * imageWidths[image_id];
-            float ymin = detection[curProposal * objectSize + 4] * imageHeights[image_id];
-            float xmax = detection[curProposal * objectSize + 5] * imageWidths[image_id];
-            float ymax = detection[curProposal * objectSize + 6] * imageHeights[image_id];
+            float confidence = detection[curProposal * objectSize + 2];
+            auto label = static_cast<int>(detection[curProposal * objectSize + 1]);
+            auto xmin = static_cast<int>(detection[curProposal * objectSize + 3] * imageWidths[image_id]);
+            auto ymin = static_cast<int>(detection[curProposal * objectSize + 4] * imageHeights[image_id]);
+            auto xmax = static_cast<int>(detection[curProposal * objectSize + 5] * imageWidths[image_id]);
+            auto ymax = static_cast<int>(detection[curProposal * objectSize + 6] * imageHeights[image_id]);
 
             std::cout << "[" << curProposal << "," << label << "] element, prob = " << confidence <<
                 "    (" << xmin << "," << ymin << ")-(" << xmax << "," << ymax << ")" << " batch id : " << image_id;
 
             if (confidence > 0.5) {
                 /** Drawing only objects with >50% probability **/
-                classes[image_id].push_back(static_cast<int>(label));
-                boxes[image_id].push_back(static_cast<int>(xmin));
-                boxes[image_id].push_back(static_cast<int>(ymin));
-                boxes[image_id].push_back(static_cast<int>(xmax - xmin));
-                boxes[image_id].push_back(static_cast<int>(ymax - ymin));
+                classes[image_id].push_back(label);
+                boxes[image_id].push_back(xmin);
+                boxes[image_id].push_back(ymin);
+                boxes[image_id].push_back(xmax - xmin);
+                boxes[image_id].push_back(ymax - ymin);
                 std::cout << " WILL BE PRINTED!";
             }
             std::cout << std::endl;
         }
 
         for (size_t batch_id = 0; batch_id < batchSize; ++batch_id) {
-            addRectangles(originalImagesData[batch_id].get(), imageHeights[batch_id], imageWidths[batch_id], boxes[batch_id], classes[batch_id]);
+            addRectangles(originalImagesData[batch_id].get(), imageHeights[batch_id], imageWidths[batch_id], boxes[batch_id], classes[batch_id],
+                          BBOX_THICKNESS);
             const std::string image_path = "out_" + std::to_string(batch_id) + ".bmp";
             if (writeOutputBmp(image_path, originalImagesData[batch_id].get(), imageHeights[batch_id], imageWidths[batch_id])) {
                 slog::info << "Image " + image_path + " created!" << slog::endl;
@@ -367,15 +350,6 @@ int main(int argc, char *argv[]) {
             }
         }
         // -----------------------------------------------------------------------------------------------------
-        std::cout << std::endl << "total inference time: " << total << std::endl;
-        std::cout << "Average running time of one iteration: " << total / static_cast<double>(FLAGS_ni) << " ms" << std::endl;
-        std::cout << std::endl << "Throughput: " << 1000 * static_cast<double>(FLAGS_ni) * batchSize / total << " FPS" << std::endl;
-        std::cout << std::endl;
-
-        /** Show performance results **/
-        if (FLAGS_pc) {
-            printPerformanceCounts(infer_request, std::cout);
-        }
     }
     catch (const std::exception& error) {
         slog::err << error.what() << slog::endl;
@@ -387,5 +361,7 @@ int main(int argc, char *argv[]) {
     }
 
     slog::info << "Execution successful" << slog::endl;
+    slog::info << slog::endl << "This sample is an API example, for any performance measurements "
+                                "please use the dedicated benchmark_app tool" << slog::endl;
     return 0;
 }

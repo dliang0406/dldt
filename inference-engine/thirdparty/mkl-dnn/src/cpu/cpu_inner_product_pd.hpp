@@ -37,11 +37,15 @@ inline bool dense_gemm_consitency_check(const memory_desc_wrapper &src_d,
     using namespace memory_format;
     using namespace utils;
     return true
-        && implication(src_d.format() == nChw8c, wei_d.format() == oIhw8i)
-        && implication(src_d.format() == nChw16c, wei_d.format() == oIhw16i)
-        && implication(src_d.format() == nchw, wei_d.format() == oihw)
-        && implication(src_d.format() == ncdhw, wei_d.format() == oidhw)
-        && implication(src_d.format() == nc, wei_d.format() == oi)
+        && IMPLICATION(src_d.format() == nChw8c, wei_d.format() == oIhw8i)
+        && IMPLICATION(src_d.format() == nChw16c, wei_d.format() == oIhw16i)
+        && IMPLICATION(src_d.format() == nCdhw8c, wei_d.format() == oIdhw8i)
+        && IMPLICATION(src_d.format() == nCdhw16c, wei_d.format() == oIdhw16i)
+        && IMPLICATION(src_d.format() == nchw, wei_d.format() == oihw)
+        && IMPLICATION(src_d.format() == ncdhw, wei_d.format() == oidhw)
+        && IMPLICATION(src_d.format() == nhwc, wei_d.format() == hwio)
+        && IMPLICATION(src_d.format() == ndhwc, wei_d.format() == dhwio)
+        && IMPLICATION(src_d.format() == nc, one_of(wei_d.format(), oi, io))
         && dst_d.format() == nc
         && src_d.only_padded_dim(1)
         && wei_d.only_padded_dim(1)
@@ -94,17 +98,27 @@ protected:
         using namespace memory_format;
         if (src_pd_.desc()->format == any)
         {
-            if (ndims() == 4) CHECK(src_pd_.set_format(nchw));
-            else if (ndims() == 5) CHECK(src_pd_.set_format(ncdhw));
-            else CHECK(src_pd_.set_format(nc));
+            switch (ndims()) {
+            case 0: // XXX: tmp fix
+            case 2: CHECK(src_pd_.set_format(nc)); break;
+            case 3: CHECK(src_pd_.set_format(ncw)); break;
+            case 4: CHECK(src_pd_.set_format(nchw)); break;
+            case 5: CHECK(src_pd_.set_format(ncdhw)); break;
+            default: assert(!"unsupported ndims format");
+            }
         }
         if (dst_pd_.desc()->format == any)
             CHECK(dst_pd_.set_format(nc));
         if (weights_pd_.desc()->format == any)
         {
-            if (ndims() == 4) CHECK(weights_pd_.set_format(oihw));
-            else if (ndims() == 5) CHECK(weights_pd_.set_format(oidhw));
-            else CHECK(weights_pd_.set_format(oi));
+            switch (ndims()) {
+            case 0: // XXX: tmp fix
+            case 2: CHECK(weights_pd_.set_format(oi)); break;
+            case 3: CHECK(weights_pd_.set_format(oiw)); break;
+            case 4: CHECK(weights_pd_.set_format(oihw)); break;
+            case 5: CHECK(weights_pd_.set_format(oidhw)); break;
+            default: assert(!"unsupported ndims format");
+            }
         }
         if (bias_pd_.desc()->format == any)
             CHECK(bias_pd_.set_format(x));
@@ -150,17 +164,27 @@ protected:
         using namespace memory_format;
         if (diff_src_pd_.desc()->format == any)
         {
-            if (ndims() == 4) CHECK(diff_src_pd_.set_format(nchw));
-            else if (ndims() == 5) CHECK(diff_src_pd_.set_format(ncdhw));
-            else CHECK(diff_src_pd_.set_format(nc));
+            switch (ndims()) {
+            case 0: // XXX: tmp fix
+            case 2: CHECK(diff_src_pd_.set_format(nc)); break;
+            case 3: CHECK(diff_src_pd_.set_format(ncw)); break;
+            case 4: CHECK(diff_src_pd_.set_format(nchw)); break;
+            case 5: CHECK(diff_src_pd_.set_format(ncdhw)); break;
+            default: assert(!"unsupported ndims format");
+            }
         }
         if (diff_dst_pd_.desc()->format == any)
             CHECK(diff_dst_pd_.set_format(nc));
         if (weights_pd_.desc()->format == any)
         {
-            if (ndims() == 4) CHECK(weights_pd_.set_format(oihw));
-            else if (ndims() == 5) CHECK(weights_pd_.set_format(oidhw));
-            else CHECK(weights_pd_.set_format(oi));
+            switch (ndims()) {
+            case 0: // XXX: tmp fix
+            case 2: CHECK(weights_pd_.set_format(oi)); break;
+            case 3: CHECK(weights_pd_.set_format(oiw)); break;
+            case 4: CHECK(weights_pd_.set_format(oihw)); break;
+            case 5: CHECK(weights_pd_.set_format(oidhw)); break;
+            default: assert(!"unsupported ndims format");
+            }
         }
         return status::success;
     }
@@ -210,17 +234,27 @@ protected:
         using namespace memory_format;
         if (src_pd_.desc()->format == any)
         {
-            if (ndims() == 4) CHECK(src_pd_.set_format(nchw));
-            else if (ndims() == 5) CHECK(src_pd_.set_format(ncdhw));
-            else CHECK(src_pd_.set_format(nc));
+            switch (ndims()) {
+            case 0: // XXX: tmp fix
+            case 2: CHECK(src_pd_.set_format(nc)); break;
+            case 3: CHECK(src_pd_.set_format(ncw)); break;
+            case 4: CHECK(src_pd_.set_format(nchw)); break;
+            case 5: CHECK(src_pd_.set_format(ncdhw)); break;
+            default: assert(!"unsupported ndims format");
+            }
         }
         if (diff_dst_pd_.desc()->format == any)
             CHECK(diff_dst_pd_.set_format(nc));
         if (diff_weights_pd_.desc()->format == any)
         {
-            if (ndims() == 4) CHECK(diff_weights_pd_.set_format(oihw));
-            else if (ndims() == 5) CHECK(diff_weights_pd_.set_format(oidhw));
-            else CHECK(diff_weights_pd_.set_format(oi));
+            switch (ndims()) {
+            case 0: // XXX: tmp fix
+            case 2: CHECK(diff_weights_pd_.set_format(oi)); break;
+            case 3: CHECK(diff_weights_pd_.set_format(oiw)); break;
+            case 4: CHECK(diff_weights_pd_.set_format(oihw)); break;
+            case 5: CHECK(diff_weights_pd_.set_format(oidhw)); break;
+            default: assert(!"unsupported ndims format");
+            }
         }
         if (diff_bias_pd_.desc()->format == any)
             CHECK(diff_bias_pd_.set_format(x));

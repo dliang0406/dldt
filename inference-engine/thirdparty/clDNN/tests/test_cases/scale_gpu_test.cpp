@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2017 Intel Corporation
+// Copyright (c) 2017-2019 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,14 +16,14 @@
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
-#include "api/CPP/memory.hpp"
-#include <api/CPP/input_layout.hpp>
-#include "api/CPP/scale.hpp"
-#include <api/CPP/topology.hpp>
-#include <api/CPP/network.hpp>
-#include <api/CPP/engine.hpp>
+#include "api/memory.hpp"
+#include <api/input_layout.hpp>
+#include "api/scale.hpp"
+#include <api/topology.hpp>
+#include <api/network.hpp>
+#include <api/engine.hpp>
 #include "test_utils/test_utils.h"
-#include "api/CPP/reorder.hpp"
+#include "api/reorder.hpp"
 
 #include <iostream>
 
@@ -47,7 +47,7 @@ TEST(scale_gpu, basic_in2x3x2x2_scale_same_size) {
     //  f1: b0:  1.1    1.2  1.25   b1:   1.3   1.4   1.5     
     //  f1: b0:  1.6    1.7  1.75   b1:   1.8   1.9   2
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto input = memory::allocate(engine, { data_types::f32, format::yxfb, { 2, 2, 3, 2 } });
     auto scale_input = memory::allocate(engine, { data_types::f32, format::yxfb, { 2, 2, 3, 2 } });
@@ -107,7 +107,7 @@ TEST(scale_gpu, basic_in2x3x2x2_scale_same_size_bfyx) {
     //  f1: b0:  1.1    1.2  1.25   b1:   1.3   1.4   1.5     
     //  f1: b0:  1.6    1.7  1.75   b1:   1.8   1.9   2
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto input = memory::allocate(engine, { data_types::f32, format::bfyx, { 2, 2, 3, 2 } });
     auto scale_input = memory::allocate(engine, { data_types::f32, format::bfyx, { 2, 2, 3, 2 } });
@@ -165,7 +165,7 @@ TEST(scale_gpu, basic_in2x3x2x2_scale_same_size_scale_bfyx) {
     //  f1: b0:  1.1    1.2  1.25   b1:   1.3   1.4   1.5     
     //  f1: b0:  1.6    1.7  1.75   b1:   1.8   1.9   2
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto batch_num = 2;
     auto feature_num = 2;
@@ -243,7 +243,7 @@ TEST(scale_gpu, basic_in2x3x2x2_scale_same_size_bias_term) {
     //  f1: b0:  3.1    3.2  3.25   b1:   3.3   3.4   3.5     
     //  f1: b0:  4.6    4.7  4.75   b1:   4.8   4.9   4
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto input = memory::allocate(engine, { data_types::f32, format::yxfb, { 2, 2, 3, 2 } });
     auto scale_input = memory::allocate(engine, { data_types::f32, format::yxfb, { 2, 2, 3, 2 } });
@@ -313,7 +313,7 @@ TEST(scale_gpu, basic_in2x3x2x2_scale_scalar) {
     //  Scale:
     //  0.1    0.2
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto batch_num = 2;
     auto feature_num = 2;
@@ -378,7 +378,7 @@ TEST(scale_gpu, basic_in2x3x2x2_scale_y) {
     //  Scale:
     //  0.1    0.2
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto batch_num = 2;
     auto feature_num = 2;
@@ -445,7 +445,7 @@ TEST(scale_gpu, basic_in2x3x2x2_scale_fb) {
     //  f0b0: 0.1   f0b1: 0.2
     //  f1b0: 0.5   f1b1: 2.0
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto batch_num = 2;
     auto feature_num = 2;
@@ -511,7 +511,7 @@ TEST(scale_gpu, basic_in2x3x2x2_scale_f) {
     //  Scale: per feature
     //  f0bx: 0.1   f1bx: 0.2
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto batch_num = 2;
     auto feature_num = 2;
@@ -578,7 +578,7 @@ TEST(scale_gpu, basic_in2x3x2x2_scale_x) {
     //  Scale:
     //  0.1    0.2  0.25
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto batch_num = 2;
     auto feature_num = 2;
@@ -646,7 +646,7 @@ TEST(scale_gpu, basic_in2x3x2x2_scale_xy) {
     //  f0:  0.1    0.2  0.25
     //  f0:  0.6    0.7  0.75
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto batch_num = 2;
     auto feature_num = 2;
@@ -719,7 +719,7 @@ TEST(scale_gpu, basic_in2x3x2x2_scale_batch1) {
     //  f1: b0:  1.1    1.2  1.25    
     //  f1: b0:  1.6    1.7  1.75
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto batch_num = 2;
     auto feature_num = 2;
@@ -793,7 +793,7 @@ TEST(scale_gpu, basic_in2x3_scale_same_size_bx) {
     //  b0: -0.1 3.2  7
     //  b1: 0    1   -1
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto input = memory::allocate(engine, { data_types::f32, format::bfyx, { 2, 1, 3, 1 } });
     auto scale_input = memory::allocate(engine, { data_types::f32, format::bfyx, { 2, 1, 3, 1 } });
@@ -857,7 +857,7 @@ TEST(scale_gpu, basic_in2x3_scale_same_size_xb) {
     //  x0: -0.1  3.2   7
     //  x1: 0       1  -1
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto input = memory::allocate(engine, { data_types::f32, format::yxfb, { 3, 1, 2, 1 } });
     auto scale_input = memory::allocate(engine, { data_types::f32, format::yxfb, { 3, 1, 2, 1 } });
@@ -919,7 +919,7 @@ TEST(scale_gpu, basic_in2x3_scale_single_value_bx) {
     //  Bias:
     //  -0.1
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto input = memory::allocate(engine, { data_types::f32, format::bfyx, { 2, 1, 3, 1 } });
     auto scale_input = memory::allocate(engine, { data_types::f32, format::bfyx, { 1, 1, 1, 1 } });
@@ -979,7 +979,7 @@ TEST(scale_gpu, basic_in2x3_scale_single_value_xb) {
     //  Bias:
     //  -0.1
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto input = memory::allocate(engine, { data_types::f32, format::yxfb, { 3, 1, 2, 1 } });
     auto scale_input = memory::allocate(engine, { data_types::f32, format::yxfb, { 1, 1, 1, 1 } });
@@ -1036,7 +1036,7 @@ TEST(scale_gpu, basic_in2x3_scale_same_size_no_bias_bx) {
     //  b0: 3.1   0.2   0.17
     //  b1: 10     -3      1
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto input = memory::allocate(engine, { data_types::f32, format::bfyx, { 2, 1, 3, 1 } });
     auto scale_input = memory::allocate(engine, { data_types::f32, format::bfyx, { 2, 1, 3, 1 } });
@@ -1086,7 +1086,7 @@ TEST(scale_gpu, basic_in2x3_scale_same_size_no_bias_xb) {
     //  x0: 3.1    0.2   0.17
     //  x1: 10      -3      1
 
-    engine engine;
+    const auto& engine = get_test_engine();
 
     auto input = memory::allocate(engine, { data_types::f32, format::yxfb, { 3, 1, 2, 1 } });
     auto scale_input = memory::allocate(engine, { data_types::f32, format::yxfb, { 3, 1, 2, 1 } });
@@ -1139,7 +1139,7 @@ TEST(scale_gpu, basic_in2x3x2x2_scale_yxfb_bfyx_same_size_padding) {
     //  0.1    0.2
     //  0.6    0.5
      
-    engine engine;
+    const auto& engine = get_test_engine();
     std::vector<format> formats_to_test = { format::yxfb , format::bfyx };
 
     for (std::vector<format>::iterator it = formats_to_test.begin(); it != formats_to_test.end(); ++it)
@@ -1153,7 +1153,7 @@ TEST(scale_gpu, basic_in2x3x2x2_scale_yxfb_bfyx_same_size_padding) {
 
         topology topology;
         topology.add(input_layout("input", input.get_layout()));
-        topology.add(reorder("reorder", "input", input.get_layout().with_padding({ { 0, 0, 1, 2 }, 0 })));
+        topology.add(reorder("reorder", "input", input.get_layout().with_padding(padding{ { 0, 0, 1, 2 }, 0 })));
         topology.add(input_layout("scale_input", scale_input.get_layout()));
         topology.add(scale("scale", "reorder", "scale_input", padding( { 0, 0, 2, 2 }, 0 )));
 
@@ -1187,6 +1187,207 @@ TEST(scale_gpu, basic_in2x3x2x2_scale_yxfb_bfyx_same_size_padding) {
         }
     }
 }
+
+TEST(scale_gpu, basic_in2x2x2x3x2_scale_same_size_bfzyx) {
+    //  Scale  : 2x2x2x3x2
+    //  Input  : 2x2x2x3x2
+    //  Output : 2x2x2x3x2
+
+    const auto& engine = get_test_engine();
+
+    auto input = memory::allocate(engine, { data_types::f32, format::bfzyx,{ 2, 2, 2, 3, 2 } });
+    auto scale_input = memory::allocate(engine, { data_types::f32, format::bfzyx,{ 2, 2, 2, 3, 2 } });
+
+    topology topology;
+    topology.add(input_layout("input", input.get_layout()));
+    topology.add(input_layout("scale_input", scale_input.get_layout()));
+    topology.add(scale("scale", "input", "scale_input"));
+
+    std::vector<float> input_vec = {
+        1.f, 2.f, -10.f, 0.f, 0.f, -11.f,
+        3.f, 4.f, -14.f, 0.5f, -0.5f, -15.f,
+        5.f, 6.f, -12.f, 1.5f, 5.2f, -13.f,
+        7.f, 8.f, -16.f, 12.f, 8.f, -17.f,
+        1.f, 2.f, -10.f, 0.f, 0.f, -11.f,
+        3.f, 4.f, -14.f, 0.5f, -0.5f, -15.f,
+        5.f, 6.f, -12.f, 1.5f, 5.2f, -13.f,
+        7.f, 8.f, -16.f, 12.f, 8.f, -17.f
+    };
+    set_values(input, input_vec);
+
+    std::vector<float> scale_input_vec = {
+        0.1f, 0.2f, 0.25f, 0.3f, 0.4f, 0.5f,
+        0.6f, 0.7f, 0.75f, 0.8f, 0.9f, 1.f,
+        1.1f, 1.2f, 1.25f, 1.3f, 1.4f, 1.5f,
+        1.6f, 1.7f, 1.75f, 1.8f, 1.9f, 2.f,
+        0.1f, 0.2f, 0.25f, 0.3f, 0.4f, 0.5f,
+        0.6f, 0.7f, 0.75f, 0.8f, 0.9f, 1.f,
+        1.1f, 1.2f, 1.25f, 1.3f, 1.4f, 1.5f,
+        1.6f, 1.7f, 1.75f, 1.8f, 1.9f, 2.f
+    };
+    set_values(scale_input, scale_input_vec);
+
+    network network(engine, topology);
+
+    network.set_input_data("input", input);
+    network.set_input_data("scale_input", scale_input);
+
+    auto outputs = network.execute();
+
+    auto output = outputs.at("scale").get_memory();
+    auto output_ptr = output.pointer<float>();
+
+    for (unsigned int i = 0; i < input_vec.size(); ++i) {
+        EXPECT_NEAR(output_ptr[i], input_vec[i] * scale_input_vec[i], 1e-05F);
+    }
+}
+
+TEST(scale_gpu, basic_in2x2x2x2x3_scale_z) {
+    //  Scale  : 2
+    //  Input  : 2x2x2x2x3
+    //  Output : 2x2x2x2x3
+
+    const auto& engine = get_test_engine();
+
+    auto batch_num = 2;
+    auto feature_num = 2;
+    auto z_size = 2;
+    auto y_size = 2;
+    auto x_size = 3;
+
+    auto input = memory::allocate(engine, { data_types::f32,format::bfzyx,{ batch_num, feature_num, x_size, y_size, z_size } });
+    auto scale_input = memory::allocate(engine, { data_types::f32, format::bfzyx,{ 1,1,1,1,z_size } });
+
+    topology topology;
+    topology.add(input_layout("input", input.get_layout()));
+    topology.add(input_layout("scale_input", scale_input.get_layout()));
+    topology.add(scale("scale", "input", "scale_input"));
+
+    std::vector<float> input_vec = {
+        1.f, 0.f, 5.f, 1.5f,
+        2.f, 0.f, 6.f, 5.2f,
+        -10.f, -11.f, -12.f, -13.f,
+        3.f, 0.5f, 7.f, 12.f,
+        4.f, -0.5f, 8.f, 8.f,
+        -14.f, -15.f, -16.f, -17.f,
+        1.f, 0.f, 5.f, 1.5f,
+        2.f, 0.f, 6.f, 5.2f,
+        -10.f, -11.f, -12.f, -13.f,
+        3.f, 0.5f, 7.f, 12.f,
+        4.f, -0.5f, 8.f, 8.f,
+        -14.f, -15.f, -16.f, -17.f
+    };
+    set_values(input, input_vec);
+
+    std::vector<float> scale_input_vec = {
+        0.1f,
+        0.2f,
+    };
+    set_values(scale_input, scale_input_vec);
+
+    network network(engine, topology);
+
+    network.set_input_data("input", input);
+    network.set_input_data("scale_input", scale_input);
+
+    auto outputs = network.execute();
+
+    auto output = outputs.at("scale").get_memory();
+    auto output_ptr = output.pointer<float>();
+
+    for (int i = 0; i < batch_num; ++i) { //B
+        for (int j = 0; j < feature_num; ++j) { //F
+            for (int m = 0; m < z_size; ++m) { //Z
+                for (int k = 0; k < y_size; ++k) { //Y
+                    for (int l = 0; l < x_size; ++l) { //X
+                        int linear_id = l + x_size * (k + y_size * (m + z_size * (j + feature_num*i)));
+                        int linear_id_scale = m;
+                        EXPECT_NEAR(output_ptr[linear_id], input_vec[linear_id] * scale_input_vec[linear_id_scale], 1e-05F);
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(scale_gpu, basic_in2x2x2x2x3_scale_xyz) {
+    //  Scale  : 1x1x2x2x3
+    //  Input  : 2x2x2x2x3
+    //  Output : 2x2x2x2x3
+
+    const auto& engine = get_test_engine();
+
+    auto batch_num = 2;
+    auto feature_num = 2;
+    auto z_size = 2;
+    auto y_size = 2;
+    auto x_size = 3;
+
+    auto input = memory::allocate(engine, { data_types::f32,format::bfzyx,{ batch_num, feature_num, x_size, y_size, z_size } });
+    auto scale_input = memory::allocate(engine, { data_types::f32, format::bfzyx,{ 1,1, x_size, y_size, z_size } });
+
+    topology topology;
+    topology.add(input_layout("input", input.get_layout()));
+    topology.add(input_layout("scale_input", scale_input.get_layout()));
+    topology.add(scale("scale", "input", "scale_input"));
+
+    std::vector<float> input_vec = {
+        1.f, 0.f, 5.f, 1.5f,
+        2.f, 0.f, 6.f, 5.2f,
+        -10.f, -11.f, -12.f, -13.f,
+        3.f, 0.5f, 7.f, 12.f,
+        4.f, -0.5f, 8.f, 8.f,
+        -14.f, -15.f, -16.f, -17.f,
+        1.f, 0.f, 5.f, 1.5f,
+        2.f, 0.f, 6.f, 5.2f,
+        -10.f, -11.f, -12.f, -13.f,
+        3.f, 0.5f, 7.f, 12.f,
+        4.f, -0.5f, 8.f, 8.f,
+        -14.f, -15.f, -16.f, -17.f
+    };
+    set_values(input, input_vec);
+
+    std::vector<float> scale_input_vec = {
+        0.1f,
+        0.2f,
+        0.25f,
+        0.6f,
+        0.7f,
+        0.75f,
+        0.1f,
+        0.2f,
+        0.25f,
+        0.6f,
+        0.7f,
+        0.75f
+    };
+    set_values(scale_input, scale_input_vec);
+
+    network network(engine, topology);
+
+    network.set_input_data("input", input);
+    network.set_input_data("scale_input", scale_input);
+
+    auto outputs = network.execute();
+
+    auto output = outputs.at("scale").get_memory();
+    auto output_ptr = output.pointer<float>();
+
+    for (int i = 0; i < batch_num; ++i) { //B
+        for (int j = 0; j < feature_num; ++j) { //F
+            for (int m = 0; m < z_size; ++m) { //Z
+                for (int k = 0; k < y_size; ++k) { //Y
+                    for (int l = 0; l < x_size; ++l) { //X
+                        int linear_id = l + x_size * (k + y_size * (m + z_size * (j + feature_num*i)));
+                        int linear_id_scale = l + x_size * (k + y_size * m);
+                        EXPECT_NEAR(output_ptr[linear_id], input_vec[linear_id] * scale_input_vec[linear_id_scale], 1e-05F);
+                    }
+                }
+            }
+        }
+    }
+}
+
 //////////////////////////////////////////////////////////////////////////////
 //                                                                          //
 //                      Exhaustive Negative Matrix tests                    //
@@ -1204,7 +1405,7 @@ static network setup_scale_network(
     bool pass_bias          //TODO: a WA for lack of std::optional<tensor> bias
 )
 {
-    engine engine;
+    const auto& engine = get_test_engine();
     topology topology;
 
     auto input_mem = memory::allocate(engine, { dt, f, input_tensor });
@@ -1252,8 +1453,8 @@ TEST(NegativeScaleTest, TestAll) {
     std::vector<std::vector<int>> bad_ts = { { 2, 4, 5, 6 }, { 3, 2, 5, 6 }, { 3, 4, 2, 6 }, { 3, 4, 5, 2 } };
 
     //TODO: should be ASSERT_THROW(statement, exception_type) - but what exception type?
-    ASSERT_ANY_THROW(setup_scale_network(d, { }, { }, { }, f, of, false));
-    ASSERT_ANY_THROW(setup_scale_network(d, { }, { }, { }, f, of, true));
+    ASSERT_ANY_THROW(setup_scale_network(d, tensor{ }, tensor{ }, tensor{ }, f, of, false));
+    ASSERT_ANY_THROW(setup_scale_network(d, tensor{ }, tensor{ }, tensor{ }, f, of, true));
 
     ASSERT_ANY_THROW(setup_scale_network(d, tensor(t), tensor(t2), tensor(t), f, of, true));
     ASSERT_ANY_THROW(setup_scale_network(d, tensor(t), tensor(t2), tensor(t), f, of, false));
@@ -1305,14 +1506,14 @@ public:
     }
 
     //TODO: use an enum instead of int i
-    static std::vector<cldnn::primitive*> generate_specific_test_params(int variant)
+    static std::vector<std::shared_ptr<cldnn::primitive>> generate_specific_test_params(int variant)
     {
-        std::vector<cldnn::primitive*> all_layer_params;
+        std::vector<std::shared_ptr<cldnn::primitive>> all_layer_params;
 
         switch(variant)
         {
-            case 0: all_layer_params.push_back(new scale("scale", "input0", "input1")); break;
-            case 1: all_layer_params.push_back(new scale("scale", "input0", "input1", "input2")); break;
+            case 0: all_layer_params.emplace_back(new scale("scale", "input0", "input1")); break;
+            case 1: all_layer_params.emplace_back(new scale("scale", "input0", "input1", "input2")); break;
                     //    case 3: all_layer_params.push_back(new scale("scale", "input0", "input1", true));    // This case should be checked by negative_scale_test
                     //    case 4: all_layer_params.push_back(new scale("scale", "input0", "input1", false));    // This case should be checked by negative_scale_test
             default: assert(0);
@@ -1327,7 +1528,9 @@ public:
 
         std::vector<tests::test_params*> all_generic_params;
 
-        for (cldnn::data_types dt : test_data_types())
+        auto data_types = test_data_types();
+
+        for (cldnn::data_types dt : data_types)
         for (tensor & t : test_input_sizes)
         {
             std::vector<std::vector<int>> attempted_dims;
@@ -1366,9 +1569,9 @@ public:
         return all_generic_params;
     }
 
-    static std::vector<std::tuple<test_params*, cldnn::primitive*>> generate_all_test_params()
+    static std::vector<std::tuple<test_params*, std::shared_ptr<cldnn::primitive>>> generate_all_test_params()
     {
-        std::vector<std::tuple<test_params*, cldnn::primitive*>> res;
+        std::vector<std::tuple<test_params*, std::shared_ptr<cldnn::primitive>>> res;
 
         for (int variant = 0; variant <= 1; ++variant)
         {
@@ -1391,7 +1594,7 @@ public:
 
     virtual bool is_format_supported(cldnn::format format) override
     {
-        return format == cldnn_format_type::cldnn_format_bfyx;
+        return format == cldnn::format::bfyx;
     }
 
     template<typename Type>
@@ -1498,7 +1701,7 @@ public:
         }
     }
 
-    static std::string custom_param_name(const ::testing::TestParamInfo<std::tuple<test_params*, cldnn::primitive*>>& info)
+    static std::string custom_param_name(const ::testing::TestParamInfo<std::tuple<test_params*, std::shared_ptr<cldnn::primitive>>>& info)
     {
         std::stringstream res;
 
@@ -1528,10 +1731,10 @@ public:
 
 private:
     static std::vector<std::unique_ptr<tests::test_params>> all_generic_params;
-    static std::vector<std::unique_ptr<cldnn::primitive>> all_layer_params;
+    static std::vector<std::shared_ptr<cldnn::primitive>> all_layer_params;
 };
 
-std::vector<std::unique_ptr<cldnn::primitive>> scale_test::all_layer_params = {};
+std::vector<std::shared_ptr<cldnn::primitive>> scale_test::all_layer_params = {};
 std::vector<std::unique_ptr<tests::test_params>> scale_test::all_generic_params = {};
 
 TEST_P(scale_test, SCALE)

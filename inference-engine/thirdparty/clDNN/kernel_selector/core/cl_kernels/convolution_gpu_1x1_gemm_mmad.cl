@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #include "include/common.cl"
-#include "include/activation_functions.cl"
+
 #include "include/data_types.cl"
 #include "include/fetch.cl"
 #include "include/mmad.cl"
@@ -65,7 +65,6 @@ KERNEL(convolution_1x1_gemm_MMAD)(
         tileC[i] = 0;
     }
 
-   	__attribute__((opencl_unroll_hint(1)))
     for (uint k = 0; k < FILTER_IFM_MMAD_NUM; ++k)
     {
         // load A tile ( input )
@@ -110,7 +109,7 @@ KERNEL(convolution_1x1_gemm_MMAD)(
         if(curr_x < INPUT0_SIZE_X && curr_y < INPUT0_SIZE_Y)
         {
             const uint dst_index = GET_DATA_INDEX(OUTPUT, b, f, curr_y, curr_x) + out_split_offset;
-            output[dst_index] = ACTIVATION(convert_char(tileC[i]), NL_M, NL_N);
+            output[dst_index] = ACTIVATION(convert_char(tileC[i]), ACTIVATION_PARAMS);
         }
     }
 }

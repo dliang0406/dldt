@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2016 Intel Corporation
+// Copyright (c) 2016-2019 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,23 +16,24 @@
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "api/CPP/memory.hpp"
-#include <api/CPP/primitive.hpp>
-#include <api/CPP/input_layout.hpp>
-#include <api/CPP/data.hpp>
-#include <api/CPP/topology.hpp>
-#include <api/CPP/network.hpp>
-#include <api/CPP/engine.hpp>
+#include "api/memory.hpp"
+#include <api/primitive.hpp>
+#include <api/input_layout.hpp>
+#include <api/data.hpp>
+#include <api/topology.hpp>
+#include <api/network.hpp>
+#include <api/engine.hpp>
 #include "test_utils.h"
 #include "float16.h"
 #include "instrumentation.h"
-#include <boost/filesystem.hpp>
 #include <iostream>
 
 using namespace cldnn;
 
 namespace tests 
 {
+    const std::string graph_dump_dir = DUMP_DIRECTORY;
+
     generic_test::generic_test() : generic_params(std::get<0>(GetParam())), layer_params(std::get<1>(GetParam())), max_ulps_diff_allowed(4), random_values(true), dump_graphs(false), dump_memory(false)
     {
     }
@@ -41,19 +42,10 @@ namespace tests
         assert((generic_params->data_type == data_types::f32) || (generic_params->data_type == data_types::f16));
         if (dump_graphs)
         {
-            std::string err = "";
-            auto graphs_dump_dir = test_info.create_dump_graph_dir(err);
-            if (err.empty())
-            {
-                generic_params->network_build_options.set_option(cldnn::build_option::graph_dumps_dir(graphs_dump_dir));
-            }
-            else
-            {
-                std::cout << err << std::endl;
-            }
+            generic_params->network_build_options.set_option(cldnn::build_option::graph_dumps_dir(DUMP_DIRECTORY));
         }
         topology topology;               
-        topology.add(*layer_params);
+        topology.add_primitive(layer_params);
 
         std::vector<memory> input_mems;
         std::vector<std::string> input_layouts_names = {};
@@ -85,7 +77,7 @@ namespace tests
                     {
                         values.push_back(static_cast<float>(multipler + j));
                     }
-                    tests::set_values_per_batch_and_feature<float>(input_mems[i], generic_params->input_layouts[i], values);
+                    tests::set_values_per_batch_and_feature<float>(input_mems[i], values);
                     multipler = values.size();
                 }
                 else
@@ -95,7 +87,7 @@ namespace tests
                     {
                         values.push_back(FLOAT16(static_cast<float>(multipler + j)));
                     }
-                    tests::set_values_per_batch_and_feature<FLOAT16>(input_mems[i], generic_params->input_layouts[i], values);
+                    tests::set_values_per_batch_and_feature<FLOAT16>(input_mems[i], values);
                     multipler = values.size();
                 }        
             }                        
@@ -134,7 +126,7 @@ namespace tests
         if (layer_params->input[0] == "reorder0")
         {
             // Add reorder layer with output padding as input to the tested layer.
-            topology.add(reorder("reorder0", "input0", input_mems[0].get_layout().with_padding({ { 0, 0, 1, 3 },{ 0, 0, 5, 2 } })));
+            topology.add(reorder("reorder0", "input0", input_mems[0].get_layout().with_padding(padding{ { 0, 0, 1, 3 },{ 0, 0, 5, 2 } })));
         }
 
         prepare_input_for_test(input_mems);
@@ -230,11 +222,21 @@ namespace tests
     static size_t calc_offfset(const layout & layout, const pitches& p)
     {
         auto lower_padding = layout.data_padding.lower_size();
-        return
-            p.b * lower_padding.batch[0] +
-            p.f * lower_padding.feature[0] +
-            p.y * lower_padding.spatial[1] +
-            p.x * lower_padding.spatial[0];
+        if (layout.format == format::bfzyx) {
+            return
+                p.b * lower_padding.batch[0] +
+                p.f * lower_padding.feature[0] +
+                p.z * lower_padding.spatial[2] +
+                p.y * lower_padding.spatial[1] +
+                p.x * lower_padding.spatial[0];
+        }
+        else {
+            return
+                p.b * lower_padding.batch[0] +
+                p.f * lower_padding.feature[0] +
+                p.y * lower_padding.spatial[1] +
+                p.x * lower_padding.spatial[0];
+        }
     }
 
     memory_desc generic_test::get_linear_memory_desc(const layout & layout)
@@ -275,6 +277,15 @@ namespace tests
                 p.b = layout.get_buffer_size().sizes(format::byxf)[1] * p.y;
                 break;
             }
+            case format::bfzyx:
+            {
+                p.x = 1;
+                p.y = layout.get_buffer_size().sizes(format::bfzyx)[4] * p.x;
+                p.z = layout.get_buffer_size().sizes(format::bfzyx)[3] * p.y;
+                p.f = layout.get_buffer_size().sizes(format::bfzyx)[2] * p.z;
+                p.b = layout.get_buffer_size().sizes(format::bfzyx)[1] * p.f;
+                break;
+            }
             default:
             {
                 throw std::runtime_error("Format not supported yet.");
@@ -284,7 +295,7 @@ namespace tests
         return{ p, calc_offfset(layout, p) };
     }
 
-    size_t generic_test::get_linear_index(const layout & layout, int b, int f, int y, int x, const memory_desc& desc)
+    size_t generic_test::get_linear_index(const layout&, size_t b, size_t f, size_t y, size_t x, const memory_desc& desc)
     {
         return 
             desc.offset + 
@@ -294,7 +305,18 @@ namespace tests
             x*desc.pitch.x;
     }
 
-    size_t generic_test::get_linear_index_with_broadcast(const layout& in_layout, int b, int f, int y, int x, const memory_desc& desc)
+    size_t generic_test::get_linear_index(const layout&, size_t b, size_t f, size_t z, size_t y, size_t x, const memory_desc& desc)
+    {
+        return
+            desc.offset +
+            b*desc.pitch.b +
+            f*desc.pitch.f +
+            z*desc.pitch.z +
+            y*desc.pitch.y +
+            x*desc.pitch.x;
+    }
+
+    size_t generic_test::get_linear_index_with_broadcast(const layout& in_layout, size_t b, size_t f, size_t y, size_t x, const memory_desc& desc)
     {
         return
             desc.offset +
@@ -317,7 +339,9 @@ namespace tests
         //{ format::yx,{ 8,8 } } , { format::yx,{ 9,9 } } , { format::yx,{ 10,10 } } , { format::yx,{ 11,11 } } , { format::yx,{ 12,12 } } , { format::yx,{ 13,13 } } ,
         //{ format::yx,{ 14,14 } } , { format::yx,{ 15,15 } } , { format::yx,{ 16,16 } } };
 
-        for (cldnn::data_types data_type : test_data_types())
+        auto data_types = test_data_types();
+
+        for (cldnn::data_types data_type : data_types)
         {
             for (cldnn::format fmt : test_input_formats)
             {
@@ -337,6 +361,12 @@ namespace tests
         return all_generic_params;
     }
 
+    const cldnn::engine & get_test_engine()
+    {
+        static const cldnn::engine engine;
+        return engine;
+    }
+
     const std::string test_dump::name() const
     {
         std::string temp = name_str;
@@ -353,20 +383,6 @@ namespace tests
         }
         std::string temp = test_case_name_str.substr(pos);
         return temp;
-    }
-
-    const std::string test_dump::create_dump_graph_dir(std::string& str_err) const
-    {
-        const std::string dump_dir = graph_dump_dir + "/" + test_case_name() + "/" + name();
-        try
-        {
-            boost::filesystem::create_directories(dump_dir);
-        }
-        catch (boost::filesystem::filesystem_error const& err)
-        {
-            str_err = err.what();
-        }
-        return dump_dir;
     }
 
     std::string test_params::print_tensor(cldnn::tensor t)
@@ -399,8 +415,7 @@ namespace tests
         std::vector<cldnn::data_types> result;
         result.push_back(cldnn::data_types::f32);
         
-        cldnn::engine temp;
-        if(temp.get_info().supports_fp16)
+        if(get_test_engine().get_info().supports_fp16)
         {
             result.push_back(cldnn::data_types::f16);
         }

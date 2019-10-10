@@ -16,31 +16,29 @@
 
 #include "mvn_inst.h"
 #include "primitive_type_base.h"
-#include "error_handler.h"
 #include "json_object.h"
+#include <string>
 
-namespace cldnn
-{
-primitive_type_id mvn_type_id()
-{
+namespace cldnn {
+primitive_type_id mvn::type_id() {
     static primitive_type_base<mvn> instance;
     return &instance;
 }
 
-layout mvn_inst::calc_output_layout(mvn_node const& node)
-{
+layout mvn_inst::calc_output_layout(mvn_node const& node) {
+    assert(static_cast<bool>(node.get_primitive()->output_data_type) == false &&
+           "Output data type forcing is not supported for mvn_node!");
     return node.input().get_non_padded_output_layout();
 }
 
-std::string mvn_inst::to_string(mvn_node const& node)
-{
-    auto node_info    = node.desc_to_json();
-    auto desc         = node.get_primitive();
-    auto epsilon      = desc->epsilon;
+std::string mvn_inst::to_string(mvn_node const& node) {
+    auto node_info = node.desc_to_json();
+    auto desc = node.get_primitive();
+    auto epsilon = desc->epsilon;
     auto across_channels = desc->across_channels ? "true" : "false";
     auto normalize_variance = desc->normalize_variance ? "true" : "false";
-    auto& input       = node.input();
-    
+    auto& input = node.input();
+
     std::stringstream primitive_description;
 
     json_composite mvn_info;
@@ -49,15 +47,11 @@ std::string mvn_inst::to_string(mvn_node const& node)
     mvn_info.add("across_channels region", across_channels);
     mvn_info.add("normalize_variance region", normalize_variance);
 
-    node_info.add("mvn info", mvn_info);
-    node_info.dump(primitive_description);
+    node_info->add("mvn info", mvn_info);
+    node_info->dump(primitive_description);
 
     return primitive_description.str();
 }
 
-mvn_inst::typed_primitive_inst(network_impl& network, mvn_node const& node)
-    :parent(network, node)
-{
-
-}
-}
+mvn_inst::typed_primitive_inst(network_impl& network, mvn_node const& node) : parent(network, node) {}
+}  // namespace cldnn

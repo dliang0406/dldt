@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -43,7 +42,6 @@ class InputController {
 public:
     InputController(const std::vector<DataPtr>& dataVec,
                     const std::string& layerName,
-                    bool irShapesOnInit = false,
                     const DefaultChecker::Ptr& checker = std::make_shared<DefaultChecker>());
 
     virtual ~InputController() = default;
@@ -54,6 +52,11 @@ public:
      * @param dataName - Data's name
      */
     virtual void setShapeByName(const SizeVector& shape, const std::string& dataName);
+
+    /**
+     * @brief Return calculated shape for name.
+     */
+    virtual SizeVector getShapeByName(const std::string& dataName);
 
     /**
      * @brief Set shape for current reshape launcher by corresponding index.
@@ -97,14 +100,13 @@ public:
 
     virtual void checkCorrespondence();
 
-private:
-    /**
-     * @brief Returns shapes from IR by accessing Data object of Layer
-     * @note Shapes are in topological order.
-     * @return shapes from IR
-     */
-    std::vector<SizeVector> getIRShapesInternal();
+    virtual bool isDataAvailable();
 
+    virtual std::vector<Blob::CPtr> getBlobs(bool check);
+
+    virtual void setBlobByName(const Blob::CPtr& blob, const std::string& name);
+
+private:
     long getPositionByName(const std::string& dataName);
 
 protected:
@@ -113,7 +115,7 @@ protected:
     std::vector<SizeVector> _irShapes;
     std::vector<std::string> _dataNames;
     std::string _layerName;
-    bool _irShapesOnInit = false;
+    std::vector<Blob::CPtr> _inferedData;
 };
 
 /**
@@ -123,7 +125,6 @@ class OutputController : public InputController {
 public:
     OutputController(const std::vector<DataPtr>& inData,
                      const std::string& layerName,
-                     bool irShapesOnInit = false,
                      const DefaultChecker::Ptr& checker = std::make_shared<DefaultChecker>());
 
     /**
@@ -133,6 +134,12 @@ public:
     virtual void propagateShapes(const std::set<ReshapeLauncher::Ptr>& launchers);
 
     virtual void setShapes(const std::vector<SizeVector>& shapes);
+
+    virtual void setBlobs(const std::vector<Blob::Ptr>& blobs);
+
+    std::vector<Blob::Ptr> createBlobs();
+
+    void propagateBlobs(const std::set<ReshapeLauncher::Ptr>& set);
 };
 
 }  // namespace ShapeInfer

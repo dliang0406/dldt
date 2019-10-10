@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -22,5 +21,6 @@ public:
 };
 
 TEST_F(CNNNetworkTests, throwsOnInitWithNull) {
-    ASSERT_THROW(CNNNetwork network(nullptr), InferenceEngine::details::InferenceEngineException);
+    std::shared_ptr<ICNNNetwork> nlptr = nullptr;
+    ASSERT_THROW(CNNNetwork network(nlptr), InferenceEngine::details::InferenceEngineException);
 }

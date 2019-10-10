@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -24,6 +23,7 @@ class MKLDNNMemoryNode {
             _id = lp->GetParamAsString("id");
         }
     }
+    virtual ~MKLDNNMemoryNode() = default;
     std::string getId() {
         return _id;
     }
@@ -58,13 +58,12 @@ class MKLDNNMemoryNodeVirtualEdge {
         InferenceEngine::details::erase_if(getExisted(), [&](const Holder::value_type & it){
             return it.second == node;
         });
-        // std::cout <<"[remove]   " << node << ", size="<< getExisted().size() <<"\n" << std::flush;
     }
 };
 
 class MKLDNNMemoryOutputNode : public MKLDNNNode, public MKLDNNMemoryNode {
  public:
-    MKLDNNMemoryOutputNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng);
+    MKLDNNMemoryOutputNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket);
     ~MKLDNNMemoryOutputNode() override;
     void getSupportedDescriptors() override;
     void initSupportedPrimitiveDescriptors() override;
@@ -86,13 +85,9 @@ class MKLDNNMemoryOutputNode : public MKLDNNNode, public MKLDNNMemoryNode {
     static Register<MKLDNNMemoryOutputNode> reg;
 };
 
-
 class MKLDNNMemoryInputNode : public MKLDNNInputNode, public MKLDNNMemoryNode {
- protected:
-    static std::string nameFromCombinedName(std::string name);
-    static std::string idFromCombinedName(std::string name);
- public:
-    MKLDNNMemoryInputNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng);
+public:
+    MKLDNNMemoryInputNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket);
     ~MKLDNNMemoryInputNode() override;
 
     bool created() const override {
@@ -103,8 +98,6 @@ class MKLDNNMemoryInputNode : public MKLDNNInputNode, public MKLDNNMemoryNode {
  private:
     static Register<MKLDNNMemoryInputNode> reg;
 };
-
-
 
 }  // namespace MKLDNNPlugin
 

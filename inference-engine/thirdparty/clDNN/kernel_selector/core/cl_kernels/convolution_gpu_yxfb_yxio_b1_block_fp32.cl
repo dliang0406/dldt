@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "include/include_all.cl"
+#include "include/sub_group.cl"
 
 __attribute__((reqd_work_group_size(LOCAL_WORK_GROUP_SIZE, 1, 1)))
 KERNEL(convolution_gpu_yxfb_yxio_b1_block)(
@@ -130,7 +131,7 @@ KERNEL(convolution_gpu_yxfb_yxio_b1_block)(
 #if BIAS_TERM
     _data0 += BLOCK_READ(bias + ofm_offset);
 #endif
-    _data0 = ACTIVATION(_data0, NL_M, NL_N);
+    _data0 = ACTIVATION(_data0, ACTIVATION_PARAMS);
 
     uint _out_id = OUTPUT_OFFSET + out_id;
     BLOCK_WRITE(output + _out_id, _data0);

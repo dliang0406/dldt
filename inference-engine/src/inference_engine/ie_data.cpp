@@ -1,10 +1,10 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include "ie_layers.h"
 #include "ie_data.h"
+#include "blob_factory.hpp"
 #include <memory>
 #include <string>
 #include <map>
@@ -12,26 +12,11 @@
 using namespace InferenceEngine;
 
 Blob::Ptr Blob::CreateFromData(const DataPtr &data) {
-    // TODO Here some decision should be made about the layout.
-    // For now we just pass the layout and use conversion to NCHW for ANY.
-    Layout targetLayout = data->getLayout();
-    if (data->getLayout() == Layout::ANY) {
-        targetLayout = Layout::NCHW;
-    }
-
-    switch (data->getPrecision()) {
-        case Precision::FP32:
-            return std::make_shared<TBlob<float>>(data->getPrecision(), targetLayout, data->getDims());
-        case Precision::Q78:
-        case Precision::I16:
-        case Precision::FP16:
-            return std::make_shared<TBlob<short>>(data->getPrecision(), targetLayout, data->getDims());
-        case Precision::U8:
-            return std::make_shared<TBlob<uint8_t>>(data->getPrecision(), targetLayout, data->getDims());
-        default:
-            THROW_IE_EXCEPTION << "precision is no set";
-    }
+    return CreateBlobFromData(data);
 }
+
+
+IE_SUPPRESS_DEPRECATED_START
 
 Data::Data(const std::string &name, Precision _precision, Layout layout): precision(_precision), layout(layout),
                                                                           name(name), userObject({0}),
@@ -51,8 +36,33 @@ Data::Data(const std::string &name, const TensorDesc &desc): tensorDesc(desc), p
     std::reverse(dims.begin(), dims.end());
 }
 
-const SizeVector& Data::getDims() const {
-    return tensorDesc.getDims();
+Data::Data(const Data & data) :
+    precision(data.precision),
+    layout(data.layout),
+    dims(data.dims),
+    creatorLayer(data.creatorLayer),
+    name(data.name),
+    inputTo(data.inputTo),
+    userObject(data.userObject),
+    tensorDesc(data.tensorDesc) {
+}
+
+Data::~Data() {
+}
+
+Data & Data::operator = (const Data & data) {
+    if (this != &data) {
+        precision = data.precision;
+        layout = data.layout;
+        dims = data.dims;
+        creatorLayer = data.creatorLayer;
+        name = data.name;
+        inputTo = data.inputTo;
+        userObject = data.userObject;
+        tensorDesc = data.tensorDesc;
+    }
+
+    return *this;
 }
 
 const Precision& Data::getPrecision() const {
@@ -63,16 +73,19 @@ const Precision& Data::getPrecision() const {
 }
 
 const TensorDesc& Data::getTensorDesc() const {
-    if ((tensorDesc.getDims().size() == 0 && tensorDesc.getDims() != dims) ||
+    if ((tensorDesc.getDims().size() == 0 && tensorDesc.getDims() != dims && dims[0] != 1) ||
             (tensorDesc.getLayout() == Layout::ANY && layout != Layout::ANY) ||
             (!tensorDesc.getPrecision() && precision)) {
         THROW_IE_EXCEPTION << "Tensor descriptor is empty!";
+    }
+    if (precision && tensorDesc.getPrecision() != precision) {
+        tensorDesc.setPrecision(precision);
     }
     return tensorDesc;
 }
 
 bool Data::isInitialized() const {
-    return !dims.empty() || !tensorDesc.getDims().empty();
+    return !dims.empty() || !tensorDesc.getDims().empty() || layout == SCALAR;
 }
 
 void Data::setDims(const SizeVector &a_dims) {
@@ -99,12 +112,24 @@ void Data::setLayout(Layout layout) {
     this->layout = layout;
 }
 
+void Data::reshape(const SizeVector &a_dims, Layout a_layout) {
+    dims = a_dims;
+    layout = a_layout;
+    std::reverse(dims.begin(), dims.end());
+
+    tensorDesc.reshape(a_dims, layout);
+}
+
 CNNLayerWeakPtr &Data::getCreatorLayer() {
     return creatorLayer;
 }
 
 const std::string &Data::getName() const {
     return name;
+}
+
+void Data::setName(const std::string& newName) {
+    name = newName;
 }
 
 std::map<std::string, CNNLayerPtr> &Data::getInputTo() {
@@ -124,4 +149,10 @@ Layout Data::getLayout() const {
 void Data::setPrecision(const Precision & precision) {
     this->precision = precision;
     tensorDesc.setPrecision(precision);
+}
+
+IE_SUPPRESS_DEPRECATED_END
+
+const SizeVector& Data::getDims() const {
+    return tensorDesc.getDims();
 }

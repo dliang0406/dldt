@@ -16,23 +16,20 @@
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
-#include "api/CPP/memory.hpp"
-#include <api/CPP/input_layout.hpp>
-#include "api/CPP/embed.hpp"
-#include <api/CPP/topology.hpp>
-#include <api/CPP/tensor.hpp>
-#include <api/CPP/network.hpp>
-#include <api/CPP/engine.hpp>
-#include <api/CPP/data.hpp>
-#include <boost/filesystem.hpp>
+#include "api/memory.hpp"
+#include <api/input_layout.hpp>
+#include "api/embed.hpp"
+#include <api/topology.hpp>
+#include <api/tensor.hpp>
+#include <api/network.hpp>
+#include <api/engine.hpp>
+#include <api/data.hpp>
 #include "test_utils/test_utils.h"
-
 
 #include <cmath>
 
 using namespace cldnn;
 using namespace tests;
-
 
 TEST(embed_gpu, seq3num4) {
     //  Input  : 1x1x1x3
@@ -54,12 +51,12 @@ TEST(embed_gpu, seq3num4) {
     //   0.0    0.0   0.0    0.0
     //   6.0    8.0  -2.0   -2.0
 
-    engine engine;
+    const auto& engine = get_test_engine();
     auto batch = 1;
     auto sequence_length = 3;
     auto num_output_size = 4;
     auto vocab_size = 3;
-    auto input_prim = memory::allocate(engine, { data_types::f32,format::bfyx,{ batch, 1, 1, sequence_length } });
+    auto input_prim = memory::allocate(engine, { data_types::f32,format::bfyx,{ batch, 1, sequence_length, 1 } });
     auto weights_prim = memory::allocate(engine, { data_types::f32,format::bfyx,{ num_output_size, 1, vocab_size, 1 } });
     auto bias_prim = memory::allocate(engine, { data_types::f32,format::bfyx,{ batch, 1, 1, num_output_size } });
     auto output_ref = memory::allocate(engine, { data_types::f32,format::bfyx,{ batch, sequence_length, num_output_size, 1 } });
@@ -120,12 +117,12 @@ TEST(embed_gpu, b2seq2num3) {
     //   -1.0   0.0   1.0   -1.0   4.0   4.0
     //    10.0  18.0  19.0  -1.0   0.0   1.0
 
-    engine engine;
+    const auto& engine = get_test_engine();
     auto batch = 2;
     auto sequence_length = 2;
     auto num_output_size = 3;
     auto vocab_size = 3;
-    auto input_prim = memory::allocate(engine, { data_types::f32,format::bfyx,{ batch, 1, 1, sequence_length } });
+    auto input_prim = memory::allocate(engine, { data_types::f32,format::bfyx,{ batch, 1, sequence_length, 1 } });
     auto weights_prim = memory::allocate(engine, { data_types::f32,format::bfyx,{ num_output_size, 1, vocab_size, 1 } });
     auto bias_prim = memory::allocate(engine, { data_types::f32,format::bfyx,{ 1, 1, 1, num_output_size } });
     auto output_ref = memory::allocate(engine, { data_types::f32,format::bfyx,{ batch, sequence_length, num_output_size, 1 } });

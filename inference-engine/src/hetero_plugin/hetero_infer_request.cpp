@@ -1,17 +1,17 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include "hetero_infer_request.h"
+#include "hetero_infer_request.hpp"
 #include <ie_blob.h>
 #include <ie_plugin.hpp>
 #include <ie_util_internal.hpp>
 #include <description_buffer.hpp>
 #include <debug.h>
 #include <ie_layouts.h>
-#include <assert.h>
-#include "ie_profiling.hpp"
+#include <cassert>
+#include <map>
+#include <string>
 
 using namespace HeteroPlugin;
 using namespace InferenceEngine;
@@ -82,7 +82,7 @@ void HeteroInferRequest::GetPerformanceCounts(std::map<std::string, InferenceEng
     for (size_t i = 0; i < _inferRequests.size(); i++) {
         auto perfMapRequest = _inferRequests[i]._request->GetPerformanceCounts();
         for (auto &&r : perfMapRequest) {
-            perfMap[std::string("subgraph") + std::to_string(i + 1) + ": " + r.first] = r.second;
+            perfMap[std::string("subgraph") + std::to_string(i) + ": " + r.first] = r.second;
         }
     }
 }

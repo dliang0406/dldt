@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
 """
 
 import numpy as np
+
+from mo.front.common.partial_infer.utils import int64_array
 
 
 def space_to_batch_infer(node):
@@ -34,15 +36,11 @@ def space_to_batch_infer(node):
     block_size = node.in_node(1).value
     pad = node.in_node(2).value
 
-    if np.any(np.array(block_size.shape) != 2) or np.any(np.array(pad.shape) != 2):  # TODO REWRITE!!!
-        return
+    pads = pad[:, 0] + input_shape[1:len(block_size)+1] + pad[:, 1]
 
-    height_pad = pad[0][0] + input_shape[1] + pad[0][1]
-    width_pad = pad[1][0] + input_shape[2] + pad[1][1]
-
-    output_shape = [input_shape[0] * block_size[0] * block_size[1], int(height_pad / block_size[0]),
-                    int(width_pad / block_size[1]), input_shape[3]]
-    node.out_node().shape = np.array(output_shape)
+    node.out_node().shape = int64_array([input_shape[0] * np.prod(block_size),
+                                         *[int(x) for x in (pads / block_size)],
+                                         *input_shape[len(block_size) + 1:]])
 
 
 def batch_to_space_infer(node):
@@ -62,15 +60,9 @@ def batch_to_space_infer(node):
     block_size = node.in_node(1).value
     crop = node.in_node(2).value
 
-    if np.any(np.array(block_size.shape) != 2) or np.any(np.array(crop.shape) != 2):  # TODO REWRITE!!!
-        return
+    pads = block_size * input_shape[1:len(block_size)+1]
 
-    hp = block_size[0] * input_shape[1]
-    wp = block_size[1] * input_shape[2]
+    sizes = pads - crop[:, 0] - crop[:, 1]
+    batch = int(input_shape[0] / (np.prod(block_size)))
 
-    height = hp - crop[0][0] - crop[0][1]
-    width = wp - crop[1][0] - crop[1][1]
-    batch = int(input_shape[0] / (block_size[0] * block_size[1]))
-
-    output_shape = [batch, height, width, input_shape[3]]
-    node.out_node().shape = np.array(output_shape)
+    node.out_node().shape = int64_array([batch, *sizes, *input_shape[len(block_size) + 1:]])

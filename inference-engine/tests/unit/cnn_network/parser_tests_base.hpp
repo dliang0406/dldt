@@ -1,15 +1,15 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #pragma once
 
+#include <fstream>
 #include <gtest/gtest.h>
 #include "xml_father.hpp"
 #include "cnn_network_impl.hpp"
 #include  <tests_common.hpp>
-#include "v2_format_parser.h"
+#include "ie_format_parser.h"
 #include <string>
 #include "pugixml.hpp"
 #include "xml_parse_utils.h"
@@ -56,7 +56,7 @@ class FormatParserTest : public TestsCommon {
     void assertParseFail(const std::string& fileContent) {
         try {
             parse(fileContent);
-            FAIL() << "Parser didn't trow";
+            FAIL() << "Parser didn't throw";
         } catch (const std::exception& ex) {
             SUCCEED() << ex.what();
         }
@@ -69,7 +69,7 @@ class FormatParserTest : public TestsCommon {
     void assertSetWeightsFail(const InferenceEngine::TBlob<uint8_t>::Ptr& binBlob) {
         try {
             parser->SetWeights(binBlob);
-            FAIL() << "Parser didn't trow";
+            FAIL() << "Parser didn't throw";
         } catch (const std::exception& ex) {
             SUCCEED() << ex.what();
         }
@@ -89,9 +89,10 @@ class FormatParserTest : public TestsCommon {
 
         pugi::xml_node root = xmlDoc.document_element();
 
-        int version = XMLParseUtils::GetIntAttr(root, "version", 1);
-        if (version > 2) THROW_IE_EXCEPTION << "cannot parse future versions: " << version;
-        parser.reset(new InferenceEngine::details::V2FormatParser(version));
+        int version = XMLParseUtils::GetIntAttr(root, "version", 2);
+        if (version < 2) THROW_IE_EXCEPTION << "Deprecated IR's versions: " << version;
+        if (version > 3) THROW_IE_EXCEPTION << "cannot parse future versions: " << version;
+        parser.reset(new InferenceEngine::details::FormatParser(version));
 
         net = parser->Parse(root);
     }
@@ -127,6 +128,19 @@ class FormatParserTest : public TestsCommon {
             .node("port").attr("id", portid)\
               .node("dim", MT_BATCH)\
               .node("dim", MT_CHANNELS)\
+              .node("dim", MT_HEIGHT)\
+              .node("dim", MT_WIDTH)\
+            .close()\
+        .close()\
+    .close()
+
+#define initInputlayer5D(name, id, portid) \
+    node("layer").attr("type", "Input").attr("name", name).attr("id", id)\
+        .node("output")\
+            .node("port").attr("id", portid)\
+              .node("dim", MT_BATCH)\
+              .node("dim", MT_CHANNELS)\
+              .node("dim", MT_DEPTH)\
               .node("dim", MT_HEIGHT)\
               .node("dim", MT_WIDTH)\
             .close()\
@@ -194,6 +208,28 @@ class FormatParserTest : public TestsCommon {
         .close()\
 
 
+#define initConv5DlayerInOut(name, id, group, output, kernel, pads_begin, pads_end, strides, dilations, inputid, outputid) \
+    node("layer").attr("type", "Convolution").attr("name", name).attr("id", id)\
+        .node("data").attr("group", group).attr("output", output).attr("kernel", kernel).attr("pads_begin", pads_begin).attr("pads_end", pads_end).attr("strides", strides).attr("dilations", dilations).close()\
+        .node("input")\
+            .node("port").attr("id", inputid)\
+              .node("dim", MT_BATCH)\
+              .node("dim", MT_CHANNELS)\
+              .node("dim", MT_DEPTH)\
+              .node("dim", MT_HEIGHT)\
+              .node("dim", MT_WIDTH)\
+            .close()\
+        .close()\
+        .node("output")\
+            .node("port").attr("id", outputid)\
+              .node("dim", MT_BATCH)\
+              .node("dim", MT_CHANNELS)\
+              .node("dim", MT_DEPTH)\
+              .node("dim", MT_HEIGHT)\
+              .node("dim", MT_WIDTH)\
+            .close()\
+        .close()\
+
 
 #define initedge(fl, fp, tl, tp)\
     node("edge").attr("from-layer", fl).attr("from-port", fp).attr("to-layer", tl).attr("to-port", tp).close()
@@ -251,11 +287,15 @@ xml().node("net").attr("name", "AlexNet").attr("version", x)\
 
     template <class T>
     InferenceEngine::TBlob<uint8_t>::Ptr makeBinBlobForMeanTest() {
-        typename InferenceEngine::TBlob<T>::Ptr binBlobFloat(new InferenceEngine::TBlob<T>(InferenceEngine::Precision::FP32, InferenceEngine::CHW, { MT_HEIGHT, MT_WIDTH, MT_CHANNELS }));
+        typename InferenceEngine::TBlob<T>::Ptr binBlobFloat(new InferenceEngine::TBlob<T>({ InferenceEngine::Precision::FP32, 
+            { MT_HEIGHT, MT_WIDTH, MT_CHANNELS }, InferenceEngine::CHW }));
         binBlobFloat->allocate();
+        IE_SUPPRESS_DEPRECATED_START
         binBlobFloat->set(MeanImage<T>::getValue());
+        IE_SUPPRESS_DEPRECATED_END
         InferenceEngine::SizeVector dims_dst = { MT_HEIGHT, MT_WIDTH * sizeof(T), MT_CHANNELS };
-        typename InferenceEngine::TBlobProxy<uint8_t>::Ptr binBlob(new InferenceEngine::TBlobProxy<uint8_t>(InferenceEngine::Precision::FP32, InferenceEngine::CHW, binBlobFloat, 0, dims_dst));
+        typename InferenceEngine::TBlobProxy<uint8_t>::Ptr binBlob(new 
+            InferenceEngine::TBlobProxy<uint8_t>(InferenceEngine::Precision::FP32, InferenceEngine::CHW, binBlobFloat, 0, dims_dst));
         return binBlob;
     }
 
@@ -281,8 +321,8 @@ xml().node("net").attr("name", "AlexNet").attr("version", x)\
         ASSERT_EQ(MT_CHANNELS, pp.getNumberOfChannels());
         for (size_t c = 0; c < pp.getNumberOfChannels(); c++) {
             auto actualMeanTBlob = std::dynamic_pointer_cast<InferenceEngine::TBlob<T> >(pp[c]->meanData);
-            ASSERT_EQ(MT_WIDTH, actualMeanTBlob->dims()[0]);
-            ASSERT_EQ(MT_HEIGHT, actualMeanTBlob->dims()[1]);
+            ASSERT_EQ(MT_WIDTH, actualMeanTBlob->getTensorDesc().getDims().back());
+            ASSERT_EQ(MT_HEIGHT, actualMeanTBlob->getTensorDesc().getDims()[actualMeanTBlob->getTensorDesc().getDims().size() - 2]);
             ASSERT_EQ(MT_WIDTH*MT_HEIGHT, actualMeanTBlob->size());
             for (unsigned index = 0; index < actualMeanTBlob->size(); index++) {
                 ASSERT_FLOAT_EQ(meanImage[index+c*MT_WIDTH*MT_HEIGHT], actualMeanTBlob->readOnly()[index]);
@@ -294,7 +334,7 @@ xml().node("net").attr("name", "AlexNet").attr("version", x)\
         return testing::XMLFather();
     }
 
-    std::shared_ptr<InferenceEngine::details::V2FormatParser> parser;
+    std::shared_ptr<InferenceEngine::details::FormatParser> parser;
 
  public:
 

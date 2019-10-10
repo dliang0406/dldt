@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -59,6 +58,10 @@ public:
         TO_STATUS(_impl->GetMappedTopology(deployedTopology));
     }
 
+    StatusCode GetExecGraphInfo(ICNNNetwork::Ptr &graphPtr, ResponseDesc *resp) noexcept override {
+        TO_STATUS(_impl->GetExecGraphInfo(graphPtr));
+    }
+
     StatusCode  QueryState(IMemoryState::Ptr & pState, size_t idx
         , ResponseDesc *resp) noexcept override {
         try {
@@ -82,6 +85,18 @@ public:
     // Need for unit tests only - TODO: unit tests should test using public API, non having details
     const std::shared_ptr<T> getImpl() const {
         return _impl;
+    }
+
+    StatusCode SetConfig(const std::map<std::string, Parameter> &config, ResponseDesc *resp) noexcept override {
+        TO_STATUS(_impl->SetConfig(config, resp));
+    }
+
+    StatusCode GetConfig(const std::string &name, Parameter &result, ResponseDesc *resp) const noexcept override {
+        TO_STATUS(_impl->GetConfig(name, result, resp));
+    }
+
+    StatusCode GetMetric(const std::string &name, Parameter &result, ResponseDesc *resp) const noexcept override {
+        TO_STATUS(_impl->GetMetric(name, result, resp));
     }
 
 private:

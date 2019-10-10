@@ -16,30 +16,31 @@
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma once
-#include "api/CPP/upsampling.hpp"
+#include "api/upsampling.hpp"
 #include "primitive_inst.h"
 #include <memory>
 #include "topology_impl.h"
+#include <string>
 
-namespace cldnn
-{
+namespace cldnn {
 template <>
-struct typed_program_node<upsampling> : public typed_program_node_base<upsampling>
-{
+struct typed_program_node<upsampling> : public typed_program_node_base<upsampling> {
     using parent = typed_program_node_base<upsampling>;
+    typed_program_node(const std::shared_ptr<upsampling> prim, program_impl& prog) : parent(prim, prog) {
+        support_padding_all(true);
+    }
 
 public:
     using parent::parent;
 
-    decltype(auto) input() const { return get_dependency(0); }
-    decltype(auto) input2() const { return get_dependency(1); }
+    program_node& input() const { return get_dependency(0); }
+    program_node& input2() const { return get_dependency(1); }
 };
 
 using upsampling_node = typed_program_node<upsampling>;
 
 template <>
-class typed_primitive_inst<upsampling> : public typed_primitive_inst_base<upsampling>
-{
+class typed_primitive_inst<upsampling> : public typed_primitive_inst_base<upsampling> {
     using parent = typed_primitive_inst_base<upsampling>;
 
 public:
@@ -52,4 +53,4 @@ public:
 
 using upsampling_inst = typed_primitive_inst<upsampling>;
 
-}
+}  // namespace cldnn

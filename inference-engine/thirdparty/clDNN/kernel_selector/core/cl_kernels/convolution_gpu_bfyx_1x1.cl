@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "include/include_all.cl"
+#include "include/sub_group.cl"
 
 #if FP16_UNIT_USED
     #define ALIGNED_BLOCK_READ8(ptr, byte_offset) as_half8(intel_sub_group_block_read_us8((const __global ushort*)(ptr) + (byte_offset)))
@@ -131,7 +132,7 @@ KERNEL(convolution_bfyx_1x1)(
     #if LEFTOVERS
         if(group_f+i < OUTPUT_FEATURE_NUM)
     #endif
-        output[dst_index] = ACTIVATION(blockC00[i], NL_M, NL_N);   
+        output[dst_index] = ACTIVATION(blockC00[i], ACTIVATION_PARAMS);
     }
 }
 

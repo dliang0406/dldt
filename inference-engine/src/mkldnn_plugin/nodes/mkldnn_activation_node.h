@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -7,7 +6,7 @@
 
 #include <ie_common.h>
 #include <mkldnn_node.h>
-#include <caseless.hpp>
+#include "details/caseless.hpp"
 #include <string>
 #include <memory>
 #include <vector>
@@ -16,7 +15,7 @@ namespace MKLDNNPlugin {
 
 class MKLDNNActivationNode : public MKLDNNNode {
 public:
-    MKLDNNActivationNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng);
+    MKLDNNActivationNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket);
     ~MKLDNNActivationNode() override = default;
 
     void getSupportedDescriptors() override;
@@ -53,9 +52,9 @@ private:
     bool initialized = false;
     float alpha = 0.0f;
     float beta = 0.0f;
-    static caseless_map<std::string,
+    static InferenceEngine::details::caseless_map<std::string,
             std::function<void(InferenceEngine::GenericLayer*, mkldnn::algorithm&, float&, float&)>> initializers;
-    mkldnn::algorithm algorithm;
+    mkldnn::algorithm algorithm = mkldnn::algorithm::eltwise_relu;
 };
 
 }  // namespace MKLDNNPlugin

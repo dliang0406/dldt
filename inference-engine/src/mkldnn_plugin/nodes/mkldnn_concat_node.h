@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -13,7 +12,7 @@ namespace MKLDNNPlugin {
 
 class MKLDNNConcatNode : public MKLDNNNode {
 public:
-    MKLDNNConcatNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng);
+    MKLDNNConcatNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket);
     ~MKLDNNConcatNode() override = default;
 
     void getSupportedDescriptors() override;
@@ -22,12 +21,15 @@ public:
     void createPrimitive() override;
     void selectOptimalPrimitiveDescriptor() override;
     bool created() const override;
+    void execute(mkldnn::stream strm) override;
 
     bool isOptimized() const;
 
 private:
     static Register<MKLDNNConcatNode> reg;
     size_t axis = 0;
+
+    size_t inverseOrder(const InferenceEngine::SizeVector& order, size_t axis);
 };
 
 }  // namespace MKLDNNPlugin

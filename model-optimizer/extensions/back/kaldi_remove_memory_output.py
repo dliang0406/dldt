@@ -1,5 +1,5 @@
 """
- Copyright (c) 2017-2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -14,9 +14,8 @@
  limitations under the License.
 """
 
-import networkx as nx
-
 from mo.back.replacement import BackReplacementPattern
+from mo.graph.graph import Graph
 
 
 class KaldiRemoveMemoryOutputBackReplacementPattern(BackReplacementPattern):
@@ -26,29 +25,30 @@ class KaldiRemoveMemoryOutputBackReplacementPattern(BackReplacementPattern):
     def pattern():
         return dict(
             nodes=[
-                ('memory_node', dict(kind='op', op='Memory')),
-                ('data_node', dict(kind='data'))
+                ('memory_node', dict(op='Memory')),
+                ('data_node', dict(kind='data')),
+                ('op_output', dict(op='Result'))
             ],
             edges=[
-                ('memory_node', 'data_node', {'out': 0})
-            ],
-            node_attrs=['kind', 'op'],
-            edge_attrs=['in', 'out'])
+                ('memory_node', 'data_node'),
+                ('data_node', 'op_output')
+            ]
+        )
 
     @staticmethod
-    def replace_pattern(graph: nx.MultiDiGraph, match: dict):
+    def replace_pattern(graph: Graph, match: dict):
         """
-        Need to find the pattern: Memory -> Data -> OpOutput
+        Need to find the pattern: Memory -> Data -> Result
 
         It is needed to make Memory nodes appear in IR,
-        but they are output nodes by default and we remove the OpOutput node after each output memory.
+        but they are output nodes by default and we remove the Result node after each output memory.
 
         DO NOT use graph clean up after it
         otherwise Memory nodes would be removed as they are not on the path from input to output
 
         Parameters
         ----------
-        graph : nx.MultiDiGraph
+        graph : Graph
            Graph with loaded model.
         match : dict
            Patterns which were found in graph structure.
@@ -56,8 +56,5 @@ class KaldiRemoveMemoryOutputBackReplacementPattern(BackReplacementPattern):
         memory = match['memory_node']
         data = match['data_node']
 
-        # Those Memory nodes that are not output ones, should not be replaced
-        if not data.has_and_set('is_output'):
-            return
         graph.remove_edge(memory.id, data.id)
         graph.remove_node(data.id)

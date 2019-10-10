@@ -16,29 +16,27 @@
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma once
-#include "api/CPP/scale_grad_input.hpp"
+#include "api/scale_grad_input.hpp"
 #include "primitive_inst.h"
+#include <string>
 
-namespace cldnn
-{
+namespace cldnn {
 
 template <>
-struct typed_program_node<scale_grad_input> : public typed_program_node_base<scale_grad_input>
-{
+struct typed_program_node<scale_grad_input> : public typed_program_node_base<scale_grad_input> {
     using parent = typed_program_node_base<scale_grad_input>;
 
 public:
     using parent::parent;
 
-    decltype(auto) input() const { return get_dependency(0); }
-    decltype(auto) scale_in() const { return get_dependency(1); }
+    program_node& input() const { return get_dependency(0); }
+    program_node& scale_in() const { return get_dependency(1); }
 };
 
 using scale_grad_input_node = typed_program_node<scale_grad_input>;
 
 template <>
-class typed_primitive_inst<scale_grad_input> : public typed_primitive_inst_base<scale_grad_input>
-{
+class typed_primitive_inst<scale_grad_input> : public typed_primitive_inst_base<scale_grad_input> {
     using parent = typed_primitive_inst_base<scale_grad_input>;
 
 public:
@@ -48,9 +46,9 @@ public:
 public:
     typed_primitive_inst(network_impl& network, scale_grad_input_node const& desc);
 
-    decltype(auto) scale_input_memory() const { return dep_memory(1); }
+    memory_impl& scale_input_memory() const { return dep_memory(1); }
 };
 
 using scale_grad_input_inst = typed_primitive_inst<scale_grad_input>;
 
-}
+}  // namespace cldnn

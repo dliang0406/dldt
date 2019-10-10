@@ -1,28 +1,30 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include "mkldnn_input_node.h"
 #include "../mkldnn_extension_utils.h"
 #include <string>
+#include "details/caseless.hpp"
 
 using namespace mkldnn;
 using namespace MKLDNNPlugin;
+using namespace InferenceEngine::details;
 
-MKLDNNInputNode::MKLDNNInputNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng) : MKLDNNNode(layer, eng) {}
+MKLDNNInputNode::MKLDNNInputNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket)
+        : MKLDNNNode(layer, eng, socket) {}
 
 void MKLDNNInputNode::getSupportedDescriptors() {
     if (getType() == Input) {
         if (!getParentEdges().empty())
-            THROW_IE_EXCEPTION << "Incorrect number of input edges.";
+            THROW_IE_EXCEPTION << "Incorrect number of input edges for layer " << getName();
         if (getChildEdges().empty())
-            THROW_IE_EXCEPTION << "Incorrect number of output edges.";
+            THROW_IE_EXCEPTION << "Incorrect number of output edges for layer " << getName();
     } else if (getType() == Output) {
         if (getParentEdges().size() != 1)
-            THROW_IE_EXCEPTION << "Incorrect number of input edges.";
+            THROW_IE_EXCEPTION << "Incorrect number of input edges for layer " << getName();
         if (!getChildEdges().empty())
-            THROW_IE_EXCEPTION << "Incorrect number of output edges.";
+            THROW_IE_EXCEPTION << "Incorrect number of output edges for layer " << getName();
     }
     constant = ConstantType::NoConst;
     auto layer = getCnnLayer();
@@ -40,8 +42,9 @@ void MKLDNNInputNode::initSupportedPrimitiveDescriptors() {
 
     InferenceEngine::LayerConfig config;
     config.dynBatchSupport = true;
+    memory::format outFormat = mkldnn::memory::format_undef;
     if (getType() == Input || getType() == MemoryInput) {
-        InferenceEngine::Precision precision = getCnnLayer()->outData[0]->getPrecision();
+        InferenceEngine::Precision precision = getCnnLayer()->precision;
         if (precision == InferenceEngine::Precision::U16 || isMeanImage)
             precision = InferenceEngine::Precision::FP32;
         auto outputDataType = MKLDNNExtensionUtils::IEPrecisionToDataType(precision);
@@ -49,8 +52,8 @@ void MKLDNNInputNode::initSupportedPrimitiveDescriptors() {
         dataConfig.inPlace = -1;
         dataConfig.constant = false;
 
-        memory::format layout = MKLDNNMemory::Convert(getCnnLayer()->outData[0]->getLayout());
-        dataConfig.desc = MKLDNNMemoryDesc(getChildEdgeAt(0)->getDims(), outputDataType, layout);
+        outFormat = MKLDNNMemory::Convert(getCnnLayer()->outData[0]->getLayout());
+        dataConfig.desc = MKLDNNMemoryDesc(getChildEdgeAt(0)->getDims(), outputDataType, outFormat);
         config.outConfs.push_back(dataConfig);
     } else if (getType() == Output) {
         InferenceEngine::Precision precision = getCnnLayer()->insData[0].lock()->getPrecision();
@@ -60,11 +63,11 @@ void MKLDNNInputNode::initSupportedPrimitiveDescriptors() {
         dataConfig.inPlace = -1;
         dataConfig.constant = false;
 
-        memory::format layout = MKLDNNMemory::Convert(getCnnLayer()->insData[0].lock()->getLayout());
-        dataConfig.desc = MKLDNNMemoryDesc(getParentEdgeAt(0)->getDims(), inputDataType, layout);
+        outFormat = MKLDNNMemory::Convert(getCnnLayer()->insData[0].lock()->getLayout());
+        dataConfig.desc = MKLDNNMemoryDesc(getParentEdgeAt(0)->getDims(), inputDataType, outFormat);
         config.inConfs.push_back(dataConfig);
     }
-    supportedPrimitiveDescriptors.emplace_back(config, impl_desc_type::unknown);
+    supportedPrimitiveDescriptors.emplace_back(config, impl_desc_type::unknown, outFormat);
 }
 
 void MKLDNNInputNode::createPrimitive() {
@@ -83,7 +86,7 @@ void MKLDNNInputNode::createPrimitive() {
 
     const PrimitiveDescInfo *selected_pd = getSelectedPrimitiveDescriptor();
     if (selected_pd == nullptr)
-        THROW_IE_EXCEPTION << "Preferable primitive descriptor does not set for node " << getName() << ".";
+        THROW_IE_EXCEPTION << "Preferable primitive descriptor is not set for node " << getName() << ".";
 }
 
 bool MKLDNNInputNode::created() const {

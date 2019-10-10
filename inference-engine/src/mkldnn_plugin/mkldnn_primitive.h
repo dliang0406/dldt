@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -17,8 +16,6 @@ namespace MKLDNNPlugin {
 class MKLDNNPrimitive {
 public:
     MKLDNNPrimitive();
-    explicit MKLDNNPrimitive(const std::shared_ptr<mkldnn::primitive>& prim);
-    operator std::shared_ptr<mkldnn::primitive>();
     operator bool();
     MKLDNNPrimitive& operator=(const std::shared_ptr<mkldnn::primitive>& prim);
     mkldnn::primitive operator*();

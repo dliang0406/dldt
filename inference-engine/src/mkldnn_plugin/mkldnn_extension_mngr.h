@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -8,9 +7,7 @@
 #include <map>
 #include <vector>
 #include <memory>
-
-#include "mkldnn/mkldnn_extension_ptr.hpp"
-#include "mkldnn/mkldnn_extension.hpp"
+#include <ie_iextension.h>
 
 namespace MKLDNNPlugin {
 
@@ -18,8 +15,8 @@ class MKLDNNExtensionManager {
 public:
     using Ptr = std::shared_ptr<MKLDNNExtensionManager>;
     MKLDNNExtensionManager() = default;
-    InferenceEngine::MKLDNNPlugin::IMKLDNNGenericPrimitive* CreateExtensionPrimitive(const InferenceEngine::CNNLayerPtr& layer);
     InferenceEngine::ILayerImplFactory* CreateExtensionFactory(const InferenceEngine::CNNLayerPtr& Layer);
+    InferenceEngine::IShapeInferImpl::Ptr CreateReshaper(const InferenceEngine::CNNLayerPtr& Layer);
     void AddExtension(InferenceEngine::IExtensionPtr extension);
 
 private:

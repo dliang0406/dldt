@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -14,7 +13,10 @@
 #include <string>
 #include <ostream>
 #include <algorithm>
+#include <cstdlib>
 #include <details/ie_exception.hpp>
+
+#include "ie_unicode.hpp"
 
 namespace InferenceEngine {
 /**
@@ -77,9 +79,14 @@ enum Layout : uint8_t {
     // I/O data layouts
     NCHW = 1,
     NHWC = 2,
+    NCDHW = 3,
+    NDHWC = 4,
 
     // weight layouts
     OIHW = 64,
+
+    // Scalar
+    SCALAR = 95,
 
     // bias layouts
     C = 96,
@@ -94,6 +101,61 @@ enum Layout : uint8_t {
 
     BLOCKED = 200,
 };
+inline std::ostream & operator << (std::ostream &out, const Layout & p) {
+    switch (p) {
+#define PRINT_LAYOUT(name)\
+        case name : out << #name; break;
+
+            PRINT_LAYOUT(ANY);
+            PRINT_LAYOUT(NCHW);
+            PRINT_LAYOUT(NHWC);
+            PRINT_LAYOUT(NCDHW);
+            PRINT_LAYOUT(NDHWC);
+            PRINT_LAYOUT(OIHW);
+            PRINT_LAYOUT(C);
+            PRINT_LAYOUT(CHW);
+            PRINT_LAYOUT(HW);
+            PRINT_LAYOUT(NC);
+            PRINT_LAYOUT(CN);
+            PRINT_LAYOUT(BLOCKED);
+#undef PRINT_LAYOUT
+            default:
+                 out << static_cast<int>(p);
+            break;
+        }
+        return out;
+    }
+
+/**
+ * @enum ColorFormat
+ * @brief Extra information about input color format for preprocessing
+ */
+enum ColorFormat : uint32_t {
+    RAW = 0u,    ///< Plain blob (default), no extra color processing required
+    RGB,         ///< RGB color format
+    BGR,         ///< BGR color format, default in DLDT
+    RGBX,        ///< RGBX color format with X ignored during inference
+    BGRX,        ///< BGRX color format with X ignored during inference
+    NV12,        ///< NV12 color format represented as compound Y+UV blob
+};
+inline std::ostream & operator << (std::ostream &out, const ColorFormat & fmt) {
+    switch (fmt) {
+#define PRINT_COLOR_FORMAT(name) \
+    case name : out << #name; break;
+
+        PRINT_COLOR_FORMAT(RAW);
+        PRINT_COLOR_FORMAT(RGB);
+        PRINT_COLOR_FORMAT(BGR);
+        PRINT_COLOR_FORMAT(RGBX);
+        PRINT_COLOR_FORMAT(BGRX);
+        PRINT_COLOR_FORMAT(NV12);
+
+#undef PRINT_COLOR_FORMAT
+
+        default: out << static_cast<uint32_t>(fmt); break;
+    }
+    return out;
+}
 
 /**
  * @struct InferenceEngineProfileInfo
@@ -157,7 +219,8 @@ enum StatusCode : int {
     REQUEST_BUSY = -8,
     RESULT_NOT_READY = -9,
     NOT_ALLOCATED = -10,
-    INFER_NOT_STARTED = -11
+    INFER_NOT_STARTED = -11,
+    NETWORK_NOT_READ = -12
 };
 
 /**
@@ -215,6 +278,10 @@ class NotAllocated : public std::logic_error
 class InferNotStarted : public std::logic_error
 { using std::logic_error::logic_error; };
 }  // namespace InferenceEngine
+
+/** @brief This class represents StatusCode::NETWORK_NOT_READ exception */
+class NetworkNotRead : public std::logic_error
+{ using std::logic_error::logic_error; };
 
 #if defined(_WIN32)
     #define __PRETTY_FUNCTION__ __FUNCSIG__

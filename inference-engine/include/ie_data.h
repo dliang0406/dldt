@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -28,46 +27,54 @@ namespace InferenceEngine {
 class INFERENCE_ENGINE_API_CLASS(Data) {
 public:
     /**
-     * @deprecated Deprecated. Please use getPrecision()
+     * @deprecated Use Data::getPrecision
      * @brief A precision type of this Data instance
      */
+    INFERENCE_ENGINE_DEPRECATED
     Precision precision;
     /**
-     * @deprecated Deprecated. Please use getFormat()
+     * @deprecated Use Data::getFormat
      * @brief A data layout of this Data instance
      */
+    INFERENCE_ENGINE_DEPRECATED
     Layout layout;
     /**
-     * @deprecated Deprecated. Please use getDims()
+     * @deprecated Use Data::getDims
      * @brief A tensor dimension array (the order is opposite to the order in the IR: w,h,c,n) of this Data instance
      */
+    INFERENCE_ENGINE_DEPRECATED
     SizeVector dims;
     /**
-     * @deprecated Deprecated. Please use getCreatorLayer()
+     * @deprecated Use Data::getCreatorLayer
      * @brief A pointer to the layer that creates this data element, null for input data elements
      */
+    INFERENCE_ENGINE_DEPRECATED
     CNNLayerWeakPtr creatorLayer;
     /**
-     * @deprecated Deprecated. Please use getName()
+     * @deprecated Use Data::getName
      * @brief A unique name that identifies this data node
      */
+    INFERENCE_ENGINE_DEPRECATED
     std::string name;
     /**
-     * @deprecated Deprecated. Please use getInputTo()
+     * @deprecated Use Data::getInputTo
      * @brief A map of layers that use this node as input.
      * It is useful for recursive NN graph traversal.
      */
+    INFERENCE_ENGINE_DEPRECATED
     std::map<std::string, CNNLayerPtr> inputTo;
     /**
-     * @deprecated Deprecated. Please use getUserObject()
+     * @deprecated Use Data::getUserObject
      * @brief A user utility place holder
      */
+    INFERENCE_ENGINE_DEPRECATED
     UserValue userObject;
 
     /**
      * @brief An empty constructor (dimensionless)
      * @param name Name of the data node
      * @param _precision Precision of the data
+     * @param layout Data layout
      */
     Data(const std::string &name, Precision _precision, Layout layout = NCHW);
 
@@ -76,6 +83,7 @@ public:
      * @param name Name of the data node
      * @param a_dims Data tensor dimensions
      * @param _precision Precision of the data
+     * @param layout Data layout
      */
     Data(const std::string &name, const SizeVector &a_dims, Precision _precision, Layout layout = NCHW);
     /**
@@ -84,6 +92,22 @@ public:
      * @param desc Tensor descriptor
      */
     Data(const std::string &name, const TensorDesc& desc);
+
+    /**
+     * @brief A copy constructor
+     * @param data A data
+     */
+    Data(const Data & data);
+
+    /**
+     * @brief A destructor
+     */
+    ~Data();
+
+    /**
+     * @brief An assignment operator
+     */
+    Data & operator = (const Data &);
 
     /**
      * @brief Checks if the current node is resolved
@@ -99,18 +123,26 @@ public:
     void setDims(const SizeVector &a_dims);
 
     /**
-    * @deprecated
+    * @deprecated Use Data::setDims to set batch size.
     * @brief Sets the batch value in the data dimensions.
     * Batch is defined as the last element in the dimensions vector.
     * @param batch_size Batch size to set
     */
-    inline void setBatchSize(size_t batch_size);
+    INFERENCE_ENGINE_DEPRECATED
+    void setBatchSize(size_t batch_size);
 
     /**
     * @brief Sets the layout value for this Data instance
     * @param layout Layout value to set
     */
     void setLayout(Layout layout);
+
+    /**
+     * @brief changes dims and layout at same time
+     * @param dims new dimensions
+     * @param layout new layout
+     */
+    void reshape(const SizeVector &dims, Layout layout);
 
     /**
     * @brief Gets the layout value for this Data instance
@@ -130,8 +162,8 @@ public:
     const Precision& getPrecision() const;
 
     /**
-     * @brief Gets a precision type of this Data instance
-     * @return Precision type
+     * @brief Sets a precision type of this Data instance
+     * @param precision Precision of the data
      */
     void setPrecision(const Precision& precision);
 
@@ -150,6 +182,14 @@ public:
      */
     const std::string& getName() const;
 
+
+    /**
+     * @brief Sets a name the Data object
+     * @param newName Name of the data node
+     */
+
+    void setName(const std::string& newName);
+
     /**
      * @brief returns child layers in di-graph
      */
@@ -160,6 +200,6 @@ public:
      */
     const UserValue& getUserObject() const;
 private:
-    TensorDesc tensorDesc;
+    mutable TensorDesc tensorDesc;
 };
 }  // namespace InferenceEngine

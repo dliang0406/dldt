@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #include "include/common.cl"
-#include "include/activation_functions.cl"
+
 #include "include/data_types.cl"
 #include "include/fetch.cl"
 #include "include/mmad.cl"
@@ -110,9 +110,9 @@ KERNEL(convolution_gpu_byxf_af32_depthwise)(
     const uint dst_index = GET_DATA_INDEX(OUTPUT, b, f, y, x) + out_split_offset;
 
 #if QUANTIZATION_TERM
-    output[dst_index] = ACTIVATION(convert_char(dotProd), NL_M, NL_N);
+    output[dst_index] = ACTIVATION(convert_char(dotProd), ACTIVATION_PARAMS);
 #else
-    output[dst_index] = ACTIVATION(dotProd, NL_M, NL_N);
+    output[dst_index] = ACTIVATION(dotProd, ACTIVATION_PARAMS);
 #endif   
     
 }

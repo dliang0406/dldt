@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -75,6 +74,7 @@ class SOCreatorTrait {};
 */
 template <class T, class Loader = SharedObjectLoader>
 class SOPointer {
+IE_SUPPRESS_DEPRECATED_START
     template <class U, class W> friend class SOPointer;
 public:
     /**
@@ -86,10 +86,22 @@ public:
     * @brief The main constructor
     * @param name Name of a shared library file
     */
-    explicit SOPointer(const std::string &name)
+    explicit SOPointer(const file_name_t &name)
         : _so_loader(new Loader(name.c_str()))
         , _pointedObj(details::shared_from_irelease(
             SymbolLoader<Loader>(_so_loader).template instantiateSymbol<T>(SOCreatorTrait<T>::name))) {
+    }
+
+    /**
+    * @brief Constructs an object with existing reference
+    * @param _pointedObj_ Existing reference to wrap
+    */
+    explicit SOPointer(T * _pointedObj_)
+        : _so_loader()
+        , _pointedObj(_pointedObj_) {
+        if (_pointedObj == nullptr) {
+            THROW_IE_EXCEPTION << "Cannot create SOPointer<T, Loader> from nullptr";
+        }
     }
 
     /**
@@ -100,6 +112,9 @@ public:
     SOPointer(const SOPointer<U, W> & that) :
         _so_loader(std::dynamic_pointer_cast<Loader>(that._so_loader)),
         _pointedObj(std::dynamic_pointer_cast<T>(that._pointedObj)) {
+        if (_pointedObj == nullptr) {
+            THROW_IE_EXCEPTION << "Cannot create object from SOPointer<U, W> reference";
+        }
     }
 
     /**
@@ -150,6 +165,7 @@ protected:
      * @brief Gets a smart pointer to the custom object
      */
     std::shared_ptr<T> _pointedObj;
+IE_SUPPRESS_DEPRECATED_END
 };
 
 }  // namespace details
@@ -161,6 +177,6 @@ protected:
  * @param name Name of the shared library file
  */
 template <class T>
-inline std::shared_ptr<T> make_so_pointer(const std::string & name) = delete;
+inline std::shared_ptr<T> make_so_pointer(const file_name_t & name) = delete;
 
 }  // namespace InferenceEngine

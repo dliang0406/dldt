@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -12,8 +11,8 @@ using namespace mkldnn;
 using namespace MKLDNNPlugin;
 using namespace InferenceEngine;
 
-MKLDNNMemoryOutputNode::MKLDNNMemoryOutputNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng)
-        : MKLDNNNode(layer, eng) , MKLDNNMemoryNode(layer) {
+MKLDNNMemoryOutputNode::MKLDNNMemoryOutputNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket)
+        : MKLDNNNode(layer, eng, socket) , MKLDNNMemoryNode(layer) {
     if (created()) {
         MKLDNNMemoryNodeVirtualEdge::registerOutput(this);
     }
@@ -39,7 +38,7 @@ void MKLDNNMemoryOutputNode::initSupportedPrimitiveDescriptors() {
     config.inConfs[0].inPlace = -1;
     config.inConfs[0].constant = false;
     config.inConfs[0].desc = MKLDNNMemoryDesc(getParentEdgeAt(0)->getDims(), inputDataType, memory::format::any);
-    supportedPrimitiveDescriptors.push_back({config, impl_desc_type::unknown});
+    supportedPrimitiveDescriptors.emplace_back(config, impl_desc_type::unknown, memory::format::any);
 }
 
 const MKLDNNEdgePtr MKLDNNMemoryOutputNode::getChildEdgeAt(size_t idx) const {
@@ -61,18 +60,8 @@ void MKLDNNMemoryOutputNode::execute(mkldnn::stream strm)  {
     memcpy(dst_ptr, src_ptr, srcMemory.GetSize());
 }
 
-std::string MKLDNNMemoryInputNode::nameFromCombinedName(std::string name) {
-    auto idSplitter = name.find("/id=");
-    return name.substr(0, idSplitter);
-}
-
-std::string MKLDNNMemoryInputNode::idFromCombinedName(std::string name) {
-    auto idSplitter = name.find("/id=");
-    return name.substr(idSplitter == std::string::npos ? 0 : idSplitter + 4);
-}
-
-MKLDNNMemoryInputNode::MKLDNNMemoryInputNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng)
-        : MKLDNNInputNode(layer, eng), MKLDNNMemoryNode(layer) {
+MKLDNNMemoryInputNode::MKLDNNMemoryInputNode(const InferenceEngine::CNNLayerPtr& layer, const mkldnn::engine& eng, int socket)
+        : MKLDNNInputNode(layer, eng, socket), MKLDNNMemoryNode(layer) {
     if (created()) {
         MKLDNNMemoryNodeVirtualEdge::registerInput(this);
     }
@@ -92,7 +81,6 @@ void MKLDNNMemoryNodeVirtualEdge::registerInput(MKLDNNMemoryInputNode * node) {
     } else {
         getExisted()[node->getId()] = node;
     }
-    // std::cout <<"[register] " << node << ", size="<< getExisted().size() <<"\n" << std::flush;
 }
 
 void MKLDNNMemoryNodeVirtualEdge::registerOutput(MKLDNNMemoryOutputNode * node) {
@@ -105,5 +93,4 @@ void MKLDNNMemoryNodeVirtualEdge::registerOutput(MKLDNNMemoryOutputNode * node) 
     } else {
         getExisted()[node->getId()] = node;
     }
-    // std::cout <<"[register] " << node << ", size="<< getExisted().size() <<"\n" << std::flush;
 }

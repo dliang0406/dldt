@@ -22,7 +22,7 @@
 #include "c_types_map.hpp"
 #include "cpu_pooling_pd.hpp"
 #include "cpu_engine.hpp"
-#include "jit_uni_pool_kernel_f32.hpp"
+#include "jit_uni_pool_kernel.hpp"
 #include "type_helpers.hpp"
 #include "utils.hpp"
 
@@ -30,7 +30,7 @@ namespace mkldnn {
 namespace impl {
 namespace cpu {
 
-template <cpu_isa_t isa>
+template <cpu_isa_t isa, impl::data_type_t d_type>
 struct jit_uni_pooling_fwd_t: public cpu_primitive_t {
     struct pd_t: public cpu_pooling_fwd_pd_t {
         pd_t(engine_t *engine, const pooling_desc_t *adesc,
@@ -40,7 +40,7 @@ struct jit_uni_pooling_fwd_t: public cpu_primitive_t {
 
         DECLARE_COMMON_PD_T(
                 JIT_IMPL_NAME_HELPER("jit:", isa, ""),
-                jit_uni_pooling_fwd_t<isa>);
+                jit_uni_pooling_fwd_t<isa, d_type>);
 
         virtual status_t init() override {
             using namespace prop_kind;
@@ -48,30 +48,31 @@ struct jit_uni_pooling_fwd_t: public cpu_primitive_t {
             using namespace utils;
             assert(engine()->kind() == engine_kind::cpu);
             bool ok = true
-                && implication(desc()->src_desc.ndims == 5,
-                        isa == avx512_common)
                 && mayiuse(isa)
+                && IMPLICATION(d_type == data_type::bf16, mayiuse(avx512_core))
                 && set_default_params() == status::success
                 && one_of(desc()->prop_kind, forward_training,
                         forward_inference)
                 && one_of(desc()->alg_kind, pooling_max,
                         pooling_avg_include_padding,
                         pooling_avg_exclude_padding)
-                && everyone_is(data_type::f32, src_pd()->desc()->data_type,
-                        dst_pd()->desc()->data_type)
+                && !has_zero_dim_memory()
+                && src_pd()->desc()->data_type == d_type
+                && dst_pd()->desc()->data_type == d_type
                 && everyone_is(desired_fmt(), src_pd()->desc()->format,
                         dst_pd()->desc()->format)
                 && attr()->has_default_values();
             if (!ok) return status::unimplemented;
 
             bool is_training = desc_.prop_kind == forward_training;
+
             if (desc()->alg_kind == pooling_max && is_training) {
                 auto indices_desc = *dst_pd()->desc();
                 indices_desc.data_type = pooling_index_data_type(desc());
                 ws_pd_ = cpu_memory_t::pd_t(engine_, &indices_desc);
             }
 
-            return jit_uni_pool_kernel_f32<isa>::init_conf(jpp_, desc_,
+            return jit_uni_pool_kernel<isa>::init_conf(jpp_, desc_,
                     src_pd_.desc(), dst_pd_.desc());
         }
         inline memory_format_t desired_fmt()
@@ -79,7 +80,7 @@ struct jit_uni_pooling_fwd_t: public cpu_primitive_t {
             using namespace memory_format;
             return (desc()->src_desc.ndims == 4)
                 ? isa == avx512_common ? nChw16c : nChw8c
-                : nCdhw16c;
+                : isa == avx512_common ? nCdhw16c : nCdhw8c;
         }
 
         jit_pool_conf_t jpp_;
@@ -92,29 +93,29 @@ struct jit_uni_pooling_fwd_t: public cpu_primitive_t {
         }
     };
 
-    jit_uni_pooling_fwd_t(const pd_t *pd, const input_vector &inputs,
+    jit_uni_pooling_fwd_t(const pd_t *apd, const input_vector &inputs,
             const output_vector &outputs)
-        : cpu_primitive_t(&conf_, inputs, outputs), conf_(*pd)
-    { kernel_ = new jit_uni_pool_kernel_f32<isa>(conf_.jpp_); }
+        : cpu_primitive_t(apd, inputs, outputs)
+    { kernel_ = new jit_uni_pool_kernel<isa>(pd()->jpp_); }
 
     ~jit_uni_pooling_fwd_t() { delete kernel_; }
 
-    typedef typename prec_traits<data_type::f32>::type data_t;
+    typedef typename prec_traits<d_type>::type data_t;
 
-    virtual void execute(event_t *e) {
-        if (conf_.jpp_.ndims == 5) execute_forward_3d();
+    virtual void execute(event_t *e) const {
+        if (pd()->jpp_.ndims == 5) execute_forward_3d();
         else execute_forward();
         e->set_state(event_t::ready);
     }
 
 private:
-    void execute_forward();
-    void execute_forward_3d();
-    pd_t conf_;
-    jit_uni_pool_kernel_f32<isa> *kernel_;
+    void execute_forward() const;
+    void execute_forward_3d() const;
+    const pd_t *pd() const { return (const pd_t *)primitive_t::pd(); }
+    jit_uni_pool_kernel<isa> *kernel_;
 };
 
-template <cpu_isa_t isa>
+template <cpu_isa_t isa, impl::data_type_t d_type>
 struct jit_uni_pooling_bwd_t: public cpu_primitive_t {
     struct pd_t: public cpu_pooling_bwd_pd_t {
         pd_t(engine_t *engine, const pooling_desc_t *adesc,
@@ -124,7 +125,7 @@ struct jit_uni_pooling_bwd_t: public cpu_primitive_t {
 
         DECLARE_COMMON_PD_T(
                 JIT_IMPL_NAME_HELPER("jit:", isa, ""),
-                jit_uni_pooling_bwd_t<isa>);
+                jit_uni_pooling_bwd_t<isa, d_type>);
 
         virtual status_t init() override {
             using namespace prop_kind;
@@ -134,18 +135,18 @@ struct jit_uni_pooling_bwd_t: public cpu_primitive_t {
             assert(engine()->kind() == engine_kind::cpu);
             bool ok = true
                 && mayiuse(isa)
-                && implication(desc()->diff_src_desc.ndims == 5,
-                        isa == avx512_common)
+                && IMPLICATION(d_type == data_type::bf16, mayiuse(avx512_core))
                 && set_default_params() == status::success
                 && one_of(desc()->prop_kind, backward, backward_data)
                 && one_of(desc()->alg_kind, pooling_max,
                         pooling_avg_include_padding,
                         pooling_avg_exclude_padding)
+                && !has_zero_dim_memory()
                 && everyone_is(desired_fmt(), diff_src_pd()->desc()->format,
                         diff_dst_pd()->desc()->format)
-                && everyone_is(data_type::f32, diff_src_pd()->desc()->data_type,
-                        diff_dst_pd()->desc()->data_type)
-                && utils::implication(desc()->alg_kind == pooling_max,
+                && diff_src_pd()->desc()->data_type == d_type
+                && diff_dst_pd()->desc()->data_type == d_type
+                && IMPLICATION(desc()->alg_kind == pooling_max,
                         hint_fwd_pd_ && hint_fwd_pd_->workspace_pd()
                         && hint_fwd_pd_->workspace_pd()->desc()->format
                                 == desired_fmt())
@@ -155,7 +156,7 @@ struct jit_uni_pooling_bwd_t: public cpu_primitive_t {
             if (desc()->alg_kind == pooling_max)
                 ws_pd_ = *(cpu_memory_t::pd_t*)hint_fwd_pd_->workspace_pd();
 
-            return jit_uni_pool_kernel_f32<isa>::init_conf(jpp_, desc_,
+            return jit_uni_pool_kernel<isa>::init_conf(jpp_, desc_,
                     diff_src_pd_.desc(), diff_dst_pd_.desc());
         }
 
@@ -164,7 +165,7 @@ struct jit_uni_pooling_bwd_t: public cpu_primitive_t {
             using namespace memory_format;
             return (desc()->diff_src_desc.ndims == 4)
                 ? isa == avx512_common ? nChw16c : nChw8c
-                : nCdhw16c;
+                : isa == avx512_common ? nCdhw16c : nCdhw8c;
         }
 
         jit_pool_conf_t jpp_;
@@ -177,26 +178,26 @@ struct jit_uni_pooling_bwd_t: public cpu_primitive_t {
         }
     };
 
-    jit_uni_pooling_bwd_t(const pd_t *pd, const input_vector &inputs,
+    jit_uni_pooling_bwd_t(const pd_t *apd, const input_vector &inputs,
             const output_vector &outputs)
-        : cpu_primitive_t(&conf_, inputs, outputs), conf_(*pd)
-    { kernel_ = new jit_uni_pool_kernel_f32<isa>(conf_.jpp_); }
+        : cpu_primitive_t(apd, inputs, outputs)
+    { kernel_ = new jit_uni_pool_kernel<isa>(pd()->jpp_); }
 
     ~jit_uni_pooling_bwd_t() { delete kernel_; }
 
-    typedef typename prec_traits<data_type::f32>::type data_t;
+    typedef typename prec_traits<d_type>::type data_t;
 
-    virtual void execute(event_t *e) {
-        if (conf_.jpp_.ndims == 5) execute_backward_3d();
+    virtual void execute(event_t *e) const {
+        if (pd()->jpp_.ndims == 5) execute_backward_3d();
         else execute_backward();
         e->set_state(event_t::ready);
     }
 
 private:
-    void execute_backward();
-    void execute_backward_3d();
-    pd_t conf_;
-    jit_uni_pool_kernel_f32<isa> *kernel_;
+    void execute_backward() const;
+    void execute_backward_3d() const;
+    const pd_t *pd() const { return (const pd_t *)primitive_t::pd(); }
+    jit_uni_pool_kernel<isa> *kernel_;
 };
 
 }

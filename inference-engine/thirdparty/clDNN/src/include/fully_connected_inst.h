@@ -16,29 +16,27 @@
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma once
-#include "api/CPP/fully_connected.hpp"
+#include "api/fully_connected.hpp"
 #include "primitive_inst.h"
+#include <string>
+#include <memory>
 
-namespace cldnn
-{
+namespace cldnn {
 template <>
-struct typed_program_node<fully_connected> : public typed_program_node_base<fully_connected>
-{
+struct typed_program_node<fully_connected> : public typed_program_node_base<fully_connected> {
     using parent = typed_program_node_base<fully_connected>;
 
 public:
     typed_program_node(std::shared_ptr<primitive> prim, program_impl& prog)
-        : parent(prim, prog)
-        , input_qf(this->get_primitive()->input_quantization_factor)
-        , output_qf(this->get_primitive()->output_quantization_factor)
-    {
-    }
+        : parent(prim, prog),
+          input_qf(this->get_primitive()->input_quantization_factor),
+          output_qf(this->get_primitive()->output_quantization_factor) {}
 
-    decltype(auto) input() const { return get_dependency(0); }
-    decltype(auto) weights() const { return get_dependency(1); }
-    decltype(auto) bias() const { return get_dependency(2); }
-    decltype(auto) weights_quantization_factors() const { return get_dependency(3); }
-    decltype(auto) output_calibration_factors() const { return get_dependency(4); }
+    program_node& input() const { return get_dependency(0); }
+    program_node& weights() const { return get_dependency(1); }
+    program_node& bias() const { return get_dependency(2); }
+    program_node& weights_quantization_factors() const { return get_dependency(3); }
+    program_node& output_calibration_factors() const { return get_dependency(4); }
     bool bias_term() const { return !get_primitive()->bias.empty(); }
     bool weights_quantization_term() const { return !get_primitive()->weights_quantization_factors.empty(); }
     bool output_calibration_term() const { return !get_primitive()->output_calibration_factors.empty(); }
@@ -53,8 +51,7 @@ private:
 using fully_connected_node = typed_program_node<fully_connected>;
 
 template <>
-class typed_primitive_inst<fully_connected> : public typed_primitive_inst_base<fully_connected>
-{
+class typed_primitive_inst<fully_connected> : public typed_primitive_inst_base<fully_connected> {
     using parent = typed_primitive_inst_base<fully_connected>;
 
 public:
@@ -64,10 +61,10 @@ public:
 public:
     typed_primitive_inst(network_impl& network, fully_connected_node const& node);
 
-    decltype(auto) weights_memory() const { return dep_memory(1); }
-    decltype(auto) bias_memory() const { return dep_memory(2); }
-    decltype(auto) weights_quantization_factors_memory() const { return dep_memory(3); }
-    decltype(auto) output_calibration_factors_memory() const { return dep_memory(4); }
+    memory_impl& weights_memory() const { return dep_memory(1); }
+    memory_impl& bias_memory() const { return dep_memory(2); }
+    memory_impl& weights_quantization_factors_memory() const { return dep_memory(3); }
+    memory_impl& output_calibration_factors_memory() const { return dep_memory(4); }
 
     bool bias_term() const { return !argument.bias.empty(); }
     bool weights_quantization_factors_term() const { return node.weights_quantization_term(); }
@@ -76,4 +73,4 @@ public:
 
 using fully_connected_inst = typed_primitive_inst<fully_connected>;
 
-}
+}  // namespace cldnn

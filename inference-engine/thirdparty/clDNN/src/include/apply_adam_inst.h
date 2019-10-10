@@ -16,32 +16,35 @@
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma once
-#include "api/CPP/apply_adam.hpp"
+#include "api/apply_adam.hpp"
 #include "primitive_inst.h"
+#include <string>
+#include <memory>
 
-namespace cldnn
-{
+namespace cldnn {
 
 template <>
-struct typed_program_node<apply_adam> : public typed_program_node_base<apply_adam>
-{
+struct typed_program_node<apply_adam> : public typed_program_node_base<apply_adam> {
+    typed_program_node(const std::shared_ptr<apply_adam> prim, program_impl& prog);
     using parent = typed_program_node_base<apply_adam>;
 
 public:
     using parent::parent;
 
-    decltype(auto) input() const { return get_dependency(0); }
-    decltype(auto) m() const { return get_dependency(1); }
-    decltype(auto) v() const { return get_dependency(2); }
-    decltype(auto) beta1_power() const { return get_dependency(3); }
-    decltype(auto) beta2_power() const { return get_dependency(4); }
+    program_node& input() const { return get_dependency(0); }
+    program_node& m() const { return get_dependency(1); }
+    program_node& v() const { return get_dependency(2); }
+    program_node& beta1_power() const { return get_dependency(3); }
+    program_node& beta2_power() const { return get_dependency(4); }
+    program_node& additional_dep() const { return get_dependency(5); }
+
+    bool has_additional_dep() const { return get_dependencies().size() > 5; }
 };
 
 using apply_adam_node = typed_program_node<apply_adam>;
 
 template <>
-class typed_primitive_inst<apply_adam> : public typed_primitive_inst_base<apply_adam>
-{
+class typed_primitive_inst<apply_adam> : public typed_primitive_inst_base<apply_adam> {
     using parent = typed_primitive_inst_base<apply_adam>;
 
 public:
@@ -51,12 +54,15 @@ public:
 public:
     typed_primitive_inst(network_impl& network, apply_adam_node const& node);
 
-    decltype(auto) m_memory() const { return dep_memory(1); }
-    decltype(auto) v_memory() const { return dep_memory(2); }
-    decltype(auto) beta1_power_memory() const { return dep_memory(3); }
-    decltype(auto) beta2_power_memory() const { return dep_memory(4); }
+    memory_impl& m_memory() const { return dep_memory(1); }
+    memory_impl& v_memory() const { return dep_memory(2); }
+    memory_impl& beta1_power_memory() const { return dep_memory(3); }
+    memory_impl& beta2_power_memory() const { return dep_memory(4); }
+    memory_impl& additional_dep() const { return dep_memory(5); }
+
+    bool has_additional_dep() const { return _deps.size() > 5; }
 };
 
 using apply_adam_inst = typed_primitive_inst<apply_adam>;
 
-}
+}  // namespace cldnn

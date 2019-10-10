@@ -1,4 +1,4 @@
-// Copyright (c) 2018 Intel Corporation
+// Copyright (c) 2018-2019 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "include/fetch.cl"
+#include "include/data_types.cl"
 
-#include "include/include_all.cl"
 
 #if FP16_UNIT_USED
     #define UNIT_CVT_FUNC(val) convert_half(val)
@@ -32,64 +33,116 @@ KERNEL (mvn_gpu_ref_within_channels)(const __global UNIT_TYPE* input, __global U
 
     // Compute mean
     uint input_idx = input_first;
-    for (uint y = 0; y < INPUT0_SIZE_Y; y++)
+    for (uint z = 0; z < INPUT0_SIZE_Z; z++)
     {
-        for (uint x = 0; x < INPUT0_SIZE_X; x++)
+        for (uint y = 0; y < INPUT0_SIZE_Y; y++)
         {
-            mean += (float)input[input_idx];
-            input_idx += INPUT0_X_PITCH;
+            for (uint x = 0; x < INPUT0_SIZE_X; x++)
+            {
+#if INPUT0_LAYOUT_BFZYX_F16
+                input_idx = GET_DATA_BFZYX_F16_INDEX(INPUT0, b, f, z, y, x);
+                mean += (float)input[input_idx];
+             }
         }
-        input_idx += INPUT0_Y_PITCH - INPUT0_SIZE_X*INPUT0_X_PITCH;
+#else
+                mean += (float)input[input_idx];
+                input_idx += INPUT0_X_PITCH;
+            }
+            input_idx += INPUT0_Y_PITCH - INPUT0_SIZE_X*INPUT0_X_PITCH;
+        }
+        input_idx += INPUT0_Z_PITCH - INPUT0_SIZE_Y*INPUT0_Y_PITCH;
+#endif
     }
-    mean /= INPUT0_SIZE_X * INPUT0_SIZE_Y;
+    mean /= INPUT0_SIZE_X * INPUT0_SIZE_Y * INPUT0_SIZE_Z;
 
+#if INPUT0_LAYOUT_BFZYX_F16
+    uint output_idx;
+#else
     uint output_idx = OUTPUT_OFFSET + b * OUTPUT_BATCH_PITCH + f * OUTPUT_FEATURE_PITCH;
-
+#endif
 #if NORMALIZE_VARIANCE == 0
     //subtract mean
     input_idx = input_first;
-    for (uint y = 0; y < INPUT0_SIZE_Y; y++)
+    for (uint z = 0; z < INPUT0_SIZE_Z; z++)
     {
-        for (uint x = 0; x < INPUT0_SIZE_X; x++)
+        for (uint y = 0; y < INPUT0_SIZE_Y; y++)
         {
-            output[output_idx] = ACTIVATION(input[input_idx] - UNIT_CVT_FUNC(mean), NL_M, NL_N);
-            input_idx += INPUT0_X_PITCH;
-            output_idx += OUTPUT_X_PITCH;
+            for (uint x = 0; x < INPUT0_SIZE_X; x++)
+            {
+#if INPUT0_LAYOUT_BFZYX_F16
+                input_idx = GET_DATA_BFZYX_F16_INDEX(INPUT0, b, f, z, y, x);
+                output_idx = GET_DATA_BFZYX_F16_INDEX(OUTPUT, b, f, z, y, x);
+                output[output_idx] = ACTIVATION(input[input_idx] - UNIT_CVT_FUNC(mean), ACTIVATION_PARAMS);
+            }
         }
-        input_idx += INPUT0_Y_PITCH - INPUT0_SIZE_X*INPUT0_X_PITCH;
-        output_idx += OUTPUT_Y_PITCH - INPUT0_SIZE_X*OUTPUT_X_PITCH;
+#else
+                output[output_idx] = ACTIVATION(input[input_idx] - UNIT_CVT_FUNC(mean), ACTIVATION_PARAMS);
+                input_idx += INPUT0_X_PITCH;
+                output_idx += OUTPUT_X_PITCH;
+            }
+            input_idx += INPUT0_Y_PITCH - INPUT0_SIZE_X*INPUT0_X_PITCH;
+            output_idx += OUTPUT_Y_PITCH - INPUT0_SIZE_X*OUTPUT_X_PITCH;
+        }
+        input_idx += INPUT0_Z_PITCH - INPUT0_SIZE_Y*INPUT0_Y_PITCH;
+        output_idx += OUTPUT_Z_PITCH - INPUT0_SIZE_Y*OUTPUT_Y_PITCH;
+#endif
     }
 #else //NORMALIZE_VARIANCE
     float variance = 0.f;
 
     //compute variance
     input_idx = input_first;
-    for (uint y = 0; y < INPUT0_SIZE_Y; y++)
+    for (uint z = 0; z < INPUT0_SIZE_Z; z++)
     {
-        for (uint x = 0; x < INPUT0_SIZE_X; x++)
+        for (uint y = 0; y < INPUT0_SIZE_Y; y++)
         {
-            float res = (float)input[input_idx] - mean;
-            variance = fma(res, res, variance);
-            input_idx += INPUT0_X_PITCH;
+            for (uint x = 0; x < INPUT0_SIZE_X; x++)
+            {
+#if INPUT0_LAYOUT_BFZYX_F16
+                input_idx = GET_DATA_BFZYX_F16_INDEX(INPUT0, b, f, z, y, x);
+                float res = (float)input[input_idx] - mean;
+                variance = fma(res, res, variance);
+            }
         }
-        input_idx += INPUT0_Y_PITCH - INPUT0_SIZE_X*INPUT0_X_PITCH;
+#else
+                float res = (float)input[input_idx] - mean;
+                variance = fma(res, res, variance);
+                input_idx += INPUT0_X_PITCH;
+            }
+            input_idx += INPUT0_Y_PITCH - INPUT0_SIZE_X*INPUT0_X_PITCH;
+        }
+        input_idx += INPUT0_Z_PITCH - INPUT0_SIZE_Y*INPUT0_Y_PITCH;
+#endif
     }
 
     //normalize variance
-    variance /= INPUT0_SIZE_Y * INPUT0_SIZE_X;
+    variance /= INPUT0_SIZE_Z * INPUT0_SIZE_Y * INPUT0_SIZE_X;
     variance = native_powr(variance + (float)EPSILON, -0.5f);
 
     input_idx = input_first;
-    for (uint y = 0; y < INPUT0_SIZE_Y; y++)
+    for (uint z = 0; z < INPUT0_SIZE_Z; z++)
     {
-        for (uint x = 0; x < INPUT0_SIZE_X; x++)
+        for (uint y = 0; y < INPUT0_SIZE_Y; y++)
         {
-            output[output_idx] = ACTIVATION((input[input_idx] - UNIT_CVT_FUNC(mean)) * UNIT_CVT_FUNC(variance), NL_M, NL_N);
-            input_idx += INPUT0_X_PITCH;
-            output_idx += OUTPUT_X_PITCH;
+            for (uint x = 0; x < INPUT0_SIZE_X; x++)
+            {
+#if INPUT0_LAYOUT_BFZYX_F16
+                input_idx = GET_DATA_BFZYX_F16_INDEX(INPUT0, b, f, z, y, x);
+                output_idx = GET_DATA_BFZYX_F16_INDEX(OUTPUT, b, f, z, y, x);
+                output[output_idx] = ACTIVATION((input[input_idx] - UNIT_CVT_FUNC(mean)) * UNIT_CVT_FUNC(variance), ACTIVATION_PARAMS);
+            }
         }
-        input_idx += INPUT0_Y_PITCH - INPUT0_SIZE_X*INPUT0_X_PITCH;
-        output_idx += OUTPUT_Y_PITCH - INPUT0_SIZE_X*OUTPUT_X_PITCH;
+#else
+                output[output_idx] = ACTIVATION((input[input_idx] - UNIT_CVT_FUNC(mean)) * UNIT_CVT_FUNC(variance), ACTIVATION_PARAMS);
+                input_idx += INPUT0_X_PITCH;
+                output_idx += OUTPUT_X_PITCH;
+            }
+            input_idx += INPUT0_Y_PITCH - INPUT0_SIZE_X*INPUT0_X_PITCH;
+            output_idx += OUTPUT_Y_PITCH - INPUT0_SIZE_X*OUTPUT_X_PITCH;
+        }
+        input_idx += INPUT0_Z_PITCH - INPUT0_SIZE_Y*INPUT0_Y_PITCH;
+        output_idx += OUTPUT_Z_PITCH - INPUT0_SIZE_Y*OUTPUT_Y_PITCH;
+#endif
     }
 #endif
 }

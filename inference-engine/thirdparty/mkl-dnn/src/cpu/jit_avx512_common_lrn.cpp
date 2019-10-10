@@ -263,13 +263,11 @@ struct jit_avx512_common_lrn_fwd_t::jit_avx512_common_lrn_kernel_f32:
         movq(xk, imm_addr64);
         vbroadcastss(zk, xk);
 
-        char tag = '\0';
         if (is_first || is_single) {
             vxorps(xmm2, xmm2, xmm2);
             for(int irb = 0; irb < FWD_RBC; irb++) {
                 vmovups(ptr[t + irb*BUFFER_BLOCK], xmm2);
             }
-            tag = 'f';
         }
         if (is_last || is_single) {
             vxorps(xmm2, xmm2, xmm2);
@@ -277,13 +275,12 @@ struct jit_avx512_common_lrn_fwd_t::jit_avx512_common_lrn_kernel_f32:
                 vmovups(ptr[t + irb*BUFFER_BLOCK + BUFFER_NEXT_OFFSET],
                     xmm2);
             }
-            tag = 'l';
         }
 
         int LSREST = LSB % FWD_RBC;
         int LS = LSB - LSREST;
 
-        jit_tagged_label lrn_loop("lrn_loop", tag);
+        Label lrn_loop;
 
         if (LS > 0) {
             mov(hw, LS);
@@ -328,6 +325,7 @@ status_t jit_avx512_common_lrn_fwd_t::pd_t::init() {
     const memory_desc_wrapper data_d(data_pd_.desc());
     bool ok = true
         && one_of(desc()->prop_kind, forward_training, forward_inference)
+        && !has_zero_dim_memory()
         && everyone_is(data_type::f32, desc()->data_desc.data_type)
         && data_d.ndims() == 4
         && data_d.dims()[1] % vsize == 0
@@ -351,20 +349,20 @@ status_t jit_avx512_common_lrn_fwd_t::pd_t::init() {
     return args_ok_across ? success : unimplemented;
 }
 
-jit_avx512_common_lrn_fwd_t::jit_avx512_common_lrn_fwd_t(const pd_t *pd,
+jit_avx512_common_lrn_fwd_t::jit_avx512_common_lrn_fwd_t(const pd_t *apd,
         const input_vector &inputs, const output_vector &outputs)
-    : cpu_primitive_t(&conf_, inputs, outputs), conf_(*pd)
+    : cpu_primitive_t(apd, inputs, outputs)
     , use_h_parallelism(0), ker_(nullptr), ker_first_(nullptr)
     , ker_last_(nullptr) {
     using namespace alg_kind;
-    const int C = conf_.C();
-    const int H = conf_.H();
-    const int W = conf_.W();
-    const int ls = conf_.desc()->local_size;
-    const float alpha = conf_.desc()->lrn_alpha / ls;
-    const float k = conf_.desc()->lrn_k;
+    const int C = pd()->C();
+    const int H = pd()->H();
+    const int W = pd()->W();
+    const int ls = pd()->desc()->local_size;
+    const float alpha = pd()->desc()->lrn_alpha / ls;
+    const float k = pd()->desc()->lrn_k;
 
-    auto pk = conf_.desc()->prop_kind;
+    auto pk = pd()->desc()->prop_kind;
 
     use_h_parallelism = H > 28 ? 1 : 0;
 
@@ -384,20 +382,20 @@ jit_avx512_common_lrn_fwd_t::jit_avx512_common_lrn_fwd_t(const pd_t *pd,
 jit_avx512_common_lrn_fwd_t::~jit_avx512_common_lrn_fwd_t()
 { delete ker_; delete ker_first_; delete ker_last_; }
 
-void jit_avx512_common_lrn_fwd_t::execute_forward() {
+void jit_avx512_common_lrn_fwd_t::execute_forward() const {
     auto src = reinterpret_cast<const data_t *>(this->input_memory(0));
     auto dst = reinterpret_cast<data_t*>(this->memory(0));
     auto ws = reinterpret_cast<data_t*>(this->memory(1));
 
-    const int N = conf_.MB();
-    const int C = conf_.C();
-    const int H = conf_.H();
-    const int W = conf_.W();
+    const int N = pd()->MB();
+    const int C = pd()->C();
+    const int H = pd()->H();
+    const int W = pd()->W();
+    const int C16 = C / vsize;
+    const size_t work_amount = use_h_parallelism ? N*C16*H : N*C16;
 
-    auto ker = [&](const int ithr, const int nthr) {
+    parallel(0, work_amount, [&](const int ithr, const int nthr) {
         size_t start{0}, end{0};
-        const int C16 = C / vsize;
-        const size_t work_amount = use_h_parallelism ? N*C16*H : N*C16;
 
         balance211(work_amount, nthr, ithr, start, end);
         if (use_h_parallelism) {
@@ -452,12 +450,7 @@ void jit_avx512_common_lrn_fwd_t::execute_forward() {
                 nd_iterator_step(n, N, c16, C16);
             }
         }
-    };
-
-# pragma omp parallel
-    {
-        ker(omp_get_thread_num(), omp_get_num_threads());
-    }
+    });
 }
 
 struct jit_avx512_common_lrn_bwd_t::jit_avx512_common_lrn_kernel_f32:
@@ -679,26 +672,23 @@ struct jit_avx512_common_lrn_bwd_t::jit_avx512_common_lrn_kernel_f32:
         is_last  = J.version == +1 || J.version == +2;
         is_single = J.version == 3;
 
-        char tag = '\0';
         if (is_first || is_single) {
             vxorps(xmm1, xmm1, xmm1);
             for(int irb = 0; irb < BWD_RBC; irb++) {
                 vmovups(ptr[t + irb*BUFFER_BLOCK], xmm1);
             }
-            tag = 'f';
         }
         if (is_last || is_single) {
             vxorps(xmm1, xmm1, xmm1);
             for(int irb = 0; irb < BWD_RBC; irb++) {
                 vmovups(ptr[t + irb*BUFFER_BLOCK + BUFFER_NEXT_OFFSET], xmm1);
             }
-            tag = 'l';
         }
 
         int LSREST = LSB % BWD_RBC;
         int LS = LSB - LSREST;
 
-        jit_tagged_label lrn_loop("lrn_loop", tag);
+        Label lrn_loop;
 
         if (LS > 0) {
             mov(hw, LS);
@@ -743,6 +733,7 @@ status_t jit_avx512_common_lrn_bwd_t::pd_t::init() {
     bool ok = true
         && utils::one_of(desc()->prop_kind, backward, backward_data)
         && utils::everyone_is(data_type::f32, desc()->data_desc.data_type)
+        && !has_zero_dim_memory()
         && data_d.ndims() == 4
         && data_d.dims()[1] % vsize == 0
         && attr()->has_default_values();
@@ -770,17 +761,17 @@ status_t jit_avx512_common_lrn_bwd_t::pd_t::init() {
     return args_ok_across ? success : unimplemented;
 }
 
-jit_avx512_common_lrn_bwd_t::jit_avx512_common_lrn_bwd_t(const pd_t *pd,
+jit_avx512_common_lrn_bwd_t::jit_avx512_common_lrn_bwd_t(const pd_t *apd,
         const input_vector &inputs, const output_vector &outputs)
-    : cpu_primitive_t(&conf_, inputs, outputs), conf_(*pd)
+    : cpu_primitive_t(apd, inputs, outputs)
     , use_h_parallelism(0),  ker_(nullptr), ker_first_(nullptr)
     , ker_last_(nullptr) {
-    const int C = conf_.C();
-    const int H = conf_.H();
-    const int W = conf_.W();
-    const int ls = conf_.desc()->local_size;
-    const float alpha = conf_.desc()->lrn_alpha / ls;
-    const float beta = conf_.desc()->lrn_beta;
+    const int C = pd()->C();
+    const int H = pd()->H();
+    const int W = pd()->W();
+    const int ls = pd()->desc()->local_size;
+    const float alpha = pd()->desc()->lrn_alpha / ls;
+    const float beta = pd()->desc()->lrn_beta;
 
     use_h_parallelism = H > 28 ? 1 : 0;
 
@@ -800,21 +791,21 @@ jit_avx512_common_lrn_bwd_t::jit_avx512_common_lrn_bwd_t(const pd_t *pd,
 jit_avx512_common_lrn_bwd_t::~jit_avx512_common_lrn_bwd_t()
 { delete ker_; delete ker_first_; delete ker_last_; }
 
-void jit_avx512_common_lrn_bwd_t::execute_backward() {
+void jit_avx512_common_lrn_bwd_t::execute_backward() const {
     auto src = reinterpret_cast<const data_t *>(this->input_memory(0));
     auto diff_dst = reinterpret_cast<const data_t *>(this->input_memory(1));
     auto ws = reinterpret_cast<const data_t *>(this->input_memory(2));
     auto diff_src = reinterpret_cast<data_t *>(this->memory(0));
 
-    const int N = conf_.MB();
-    const int C = conf_.C();
-    const int H = conf_.H();
-    const int W = conf_.W();
+    const int N = pd()->MB();
+    const int C = pd()->C();
+    const int H = pd()->H();
+    const int W = pd()->W();
+    const int C16 = C / vsize;
+    const size_t work_amount = use_h_parallelism ? N*C16*H : N*C16;
 
-    auto ker = [&](const int ithr, const int nthr) {
+    parallel(0, work_amount, [&](const int ithr, const int nthr) {
         size_t start{0}, end{0};
-        const int C16 = C / vsize;
-        const size_t work_amount = use_h_parallelism ? N*C16*H : N*C16;
 
         balance211(work_amount, nthr, ithr, start, end);
         if (use_h_parallelism) {
@@ -871,12 +862,7 @@ void jit_avx512_common_lrn_bwd_t::execute_backward() {
                 nd_iterator_step(n, N, c16, C16);
             }
         }
-    };
-
-# pragma omp parallel
-    {
-        ker(omp_get_thread_num(), omp_get_num_threads());
-    }
+    });
 }
 
 }

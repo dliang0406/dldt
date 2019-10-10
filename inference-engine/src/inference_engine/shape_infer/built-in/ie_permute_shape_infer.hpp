@@ -1,13 +1,11 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #pragma once
 
 #include <description_buffer.hpp>
-#include <ie_layer_validators.hpp>
-#include "impl_register.hpp"
+#include "ie_built_in_impl.hpp"
 #include <ie_layers.h>
 #include <map>
 #include <memory>
@@ -24,7 +22,7 @@ class PermuteShapeProp : public BuiltInShapeInferImpl {
 public:
     explicit PermuteShapeProp(const std::string& type) : BuiltInShapeInferImpl(type) {}
 
-    void inferShapesImpl(const std::vector<SizeVector>& inShapes,
+    void inferShapesImpl(const std::vector<Blob::CPtr>& inBlobs,
                          const std::map<std::string, std::string>& params,
                          const std::map<std::string, Blob::Ptr>& blobs,
                          std::vector<SizeVector>& outShapes) override {
@@ -32,7 +30,7 @@ public:
         CNNLayer permuteLayer(lp);
         permuteLayer.params = params;
         permuteLayer.type = _type;
-        validate(&permuteLayer, inShapes, params, blobs);
+        validate(&permuteLayer, inBlobs, params, blobs);
 
         std::vector<size_t> order;
         std::vector<int> layerOrder = permuteLayer.GetParamAsInts("order");

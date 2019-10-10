@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -14,6 +13,7 @@
 #include <map>
 #include "ie_iinfer_request.hpp"
 #include "details/ie_exception_conversion.hpp"
+#include "ie_plugin_ptr.hpp"
 
 namespace InferenceEngine {
 
@@ -58,6 +58,7 @@ public:
  */
 class InferRequest {
     IInferRequest::Ptr actual;
+    InferenceEnginePluginPtr plg;
     std::shared_ptr<details::ICompletionCallbackWrapper> callback;
 
     static void callWrapper(InferenceEngine::IInferRequest::Ptr request, InferenceEngine::StatusCode code) {
@@ -68,7 +69,17 @@ class InferRequest {
     }
 
 public:
+    /**
+     * @brief Default constructor
+     */
     InferRequest() = default;
+
+    /**
+     * @brief Destructor
+     */
+    ~InferRequest() {
+        actual = nullptr;
+    }
 
     /**
      * @brief Sets input/output data to infer
@@ -137,19 +148,20 @@ public:
     }
 
     /**
-    * @brief Sets data that will contain result of the inference
-    * @param results - a reference to a map of result blobs accessed by output names.
-    *        The type of Blob must correspond to the network output precision and size.
+    * @brief Sets new batch size when dynamic batching is enabled in executable network that created this request.
+    * @param batch new batch size to be used by all the following inference calls for this request.
     */
     void SetBatch(const int batch) {
         CALL_STATUS_FNC(SetBatch, batch);
     }
 
     /**
-     * constructs InferRequest from initialised shared_pointer
-     * @param actual
+     * constructs InferRequest from the initialized shared_pointer
+     * @param request Initialized shared pointer
+     * @param plg Plugin to use
      */
-    explicit InferRequest(IInferRequest::Ptr request) : actual(request) {}
+    explicit InferRequest(IInferRequest::Ptr request, InferenceEnginePluginPtr plg = {})
+    : actual(request), plg(plg) {}
 
     /**
      * @brief Start inference of specified input(s) in asynchronous mode
@@ -187,14 +199,25 @@ public:
         return actual;
     }
 
+    /**
+     * @brief Checks if current InferRequest object is not initialized
+     * @return true if current InferRequest object is not initialized, false - otherwise
+     */
     bool operator!() const noexcept {
         return !actual;
     }
 
+    /**
+     * @brief Checks if current InferRequest object is initialized
+     * @return true if current InferRequest object is initialized, false - otherwise
+     */
     explicit operator bool() const noexcept {
         return !!actual;
     }
 
+    /**
+     * @brief A smart pointer to the InferRequest object
+     */
     using Ptr = std::shared_ptr<InferRequest>;
 };
 

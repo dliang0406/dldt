@@ -1,18 +1,15 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include <gtest/gtest.h>
 #include <gmock/gmock-spec-builders.h>
 #include "mkldnn_plugin/mkldnn_graph.h"
-#include "mock_mkldnn_primitive.hpp"
 
 #include "test_graph.hpp"
 
 #include "single_layer_common.hpp"
 #include <mkldnn_plugin/mkldnn_extension_utils.h>
-#include <extension/ext_list.hpp>
 #include "tests_common.hpp"
 
 
@@ -139,7 +136,7 @@ class MKLDNNCPUExtInterpTests: public TestsCommon, public WithParamInterface<int
             </output>
         </layer>
         <layer name="interp1" id="1" type="Interp" precision="FP32">
-            <data pad_beg="_PB_" pad_end="_PE_"/>
+            <data pad_beg="_PB_" pad_end="_PE_" height="_OH_" width="_OW_"/>
 
             <input>
                 <port id="1">
@@ -193,9 +190,9 @@ protected:
             InferenceEngine::CNNNetReader net_reader;
             ASSERT_NO_THROW(net_reader.ReadNetwork(model.data(), model.length()));
 
-            std::shared_ptr<InferenceEngine::IExtension> cpuExt(new InferenceEngine::Extensions::Cpu::CpuExtensions());
+            InferenceEngine::Extension cpuExt(make_so_name("cpu_extension"));
             MKLDNNPlugin::MKLDNNExtensionManager::Ptr extMgr(new MKLDNNPlugin::MKLDNNExtensionManager());
-            extMgr->AddExtension(cpuExt);
+            extMgr->AddExtension(InferenceEngine::IExtensionPtr(&cpuExt, [](InferenceEngine::IExtension*){}));
 
             MKLDNNGraphTestClass graph;
             graph.CreateGraph(net_reader.getNetwork(), extMgr);
@@ -215,9 +212,9 @@ protected:
             }
             ASSERT_LE(4, nodes.size());
 
-            InferenceEngine::SizeVector dims_src = {p.in.w, p.in.h, p.in.c, p.in.n};
+            InferenceEngine::SizeVector dims_src = {p.in.n, p.in.c, p.in.h, p.in.w};
 
-            InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float, const InferenceEngine::SizeVector>(InferenceEngine::Precision::FP32, InferenceEngine::NCHW, dims_src);
+            InferenceEngine::Blob::Ptr src = InferenceEngine::make_shared_blob<float>({InferenceEngine::Precision::FP32, dims_src, InferenceEngine::NCHW});
             src->allocate();
             fill_data(src->buffer(), src->size());
 

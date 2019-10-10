@@ -1,12 +1,10 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include <gtest/gtest.h>
 #include <gmock/gmock-spec-builders.h>
 #include "mkldnn_plugin/mkldnn_graph.h"
-#include "mock_mkldnn_primitive.hpp"
 
 #include "test_graph.hpp"
 
@@ -42,7 +40,6 @@ void ref_permute(const InferenceEngine::TBlob<data_t> &src, InferenceEngine::TBl
     }
     InferenceEngine::TensorDesc desc(InferenceEngine::Precision::FP32, src.getTensorDesc().getDims(), {orderedDims, prm.order});
 
-#pragma omp parallel for
     for (int i=0; i < src.size(); i++) {
         dst_data[desc.offset(i)] = src_data[src.getTensorDesc().offset(i)];
     }
@@ -195,7 +192,19 @@ INSTANTIATE_TEST_CASE_P(
                 permute_test_params{{2, 3, 4, 5, 6}, {0, 3, 2, 4, 1}, 1, MKLDNNPlugin::impl_desc_type::unknown},
                 permute_test_params{{2, 8, 2, 2, 4, 5}, {0, 1, 4, 2, 5, 3}, 1, MKLDNNPlugin::impl_desc_type::unknown},
                 permute_test_params{{2, 8, 3, 3, 4, 5}, {0, 1, 4, 2, 5, 3}, 1, MKLDNNPlugin::impl_desc_type::unknown},
-                permute_test_params{{2, 8, 3, 4}, {3, 0, 1, 2}, 2, MKLDNNPlugin::impl_desc_type::unknown}
+                permute_test_params{{2, 8, 3, 4}, {3, 0, 1, 2}, 2, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 12, 9}, {0, 2, 1}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 8, 3, 3, 4, 5}, {0, 3, 4, 1, 5, 2}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 3, 4, 5}, {0, 1, 3, 2}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 3, 4, 5, 7}, {0, 3, 1, 4, 2}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 3, 4, 5}, {1, 2, 0, 3}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 3, 4, 5, 7}, {0, 2, 1, 3, 4}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 3, 4, 5, 7}, {0, 2, 4, 3, 1}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 3, 4, 5, 7}, {0, 4, 2, 3, 1}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 3, 4, 5}, {0, 3, 1, 2}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{3, 4, 7}, {1, 0, 2}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{3, 4, 7, 8, 4}, {0, 2, 3, 4, 1}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{3, 4, 7, 8, 4}, {0, 4, 1, 2, 3}, 1, MKLDNNPlugin::impl_desc_type::unknown}
         ));
 
 class MKLDNNGraphDynBatchPermuteTests: public MKLDNNGraphPermuteTests {
@@ -273,5 +282,15 @@ INSTANTIATE_TEST_CASE_P(
                 permute_test_params{{2, 3, 4, 5, 6}, {0, 2, 4, 3, 1}, 1, MKLDNNPlugin::impl_desc_type::unknown},
                 permute_test_params{{2, 3, 4, 5, 6}, {0, 3, 2, 4, 1}, 1, MKLDNNPlugin::impl_desc_type::unknown},
                 permute_test_params{{2, 8, 2, 2, 4, 5}, {0, 1, 4, 2, 5, 3}, 1, MKLDNNPlugin::impl_desc_type::unknown},
-                permute_test_params{{2, 8, 3, 3, 4, 5}, {0, 1, 4, 2, 5, 3}, 1, MKLDNNPlugin::impl_desc_type::unknown}
+                permute_test_params{{2, 8, 3, 3, 4, 5}, {0, 1, 4, 2, 5, 3}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 12, 9}, {0, 2, 1}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 8, 3, 3, 4, 5}, {0, 3, 4, 1, 5, 2}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 3, 4, 5}, {0, 1, 3, 2}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 3, 4, 5, 7}, {0, 3, 1, 4, 2}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 3, 4, 5, 7}, {0, 2, 1, 3, 4}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 3, 4, 5, 7}, {0, 2, 4, 3, 1}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 3, 4, 5, 7}, {0, 4, 2, 3, 1}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{2, 3, 4, 5}, {0, 3, 1, 2}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{3, 4, 7, 8, 4}, {0, 2, 3, 4, 1}, 1, MKLDNNPlugin::impl_desc_type::unknown},
+                permute_test_params{{3, 4, 7, 8, 4}, {0, 4, 1, 2, 3}, 1, MKLDNNPlugin::impl_desc_type::unknown}
         ));

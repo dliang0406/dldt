@@ -16,29 +16,23 @@
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma once
-#include "api/CPP/profiling.hpp"
-#include "ocl_user_event.h"
 #include "ocl_toolkit.h"
+#include "event_impl.h"
+#include <vector>
+#include <memory>
 
-namespace cldnn { namespace gpu {
-class events_waiter : public context_holder
-{
+namespace cldnn {
+namespace gpu {
+class events_waiter : public context_holder {
 public:
-    explicit events_waiter(std::shared_ptr<gpu_toolkit> context) : context_holder(context)
-    {}
+    explicit events_waiter(std::shared_ptr<gpu_toolkit> context) : context_holder(context) {}
 
-    event_impl::ptr run(const std::vector<event_impl::ptr>& dependencies)
-    {
-        if (dependencies.size() == 0)
-        {
-            auto ev = new gpu::user_event(context(), true);
-            return{ ev, false };
-        }
-
+    event_impl::ptr run(int queue_id, const std::vector<event_impl::ptr>& dependencies) {
         if (dependencies.size() == 1)
             return dependencies[0];
 
-        return context()->enqueue_marker(dependencies);
+        return context()->enqueue_marker(queue_id, dependencies);
     }
 };
-}}
+}  // namespace gpu
+}  // namespace cldnn

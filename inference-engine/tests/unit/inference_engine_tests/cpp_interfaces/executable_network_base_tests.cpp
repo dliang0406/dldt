@@ -1,11 +1,9 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
 #include <gtest/gtest.h>
 #include <gmock/gmock-spec-builders.h>
-#include <mock_mkldnn_extension.hpp>
 #include "cpp_interfaces/impl/mock_inference_plugin_internal.hpp"
 #include "cpp_interfaces/interface/mock_iexecutable_network_internal.hpp"
 

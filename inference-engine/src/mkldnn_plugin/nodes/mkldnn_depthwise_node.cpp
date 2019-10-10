@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -10,12 +9,15 @@
 #include <vector>
 #include <mkldnn_types.h>
 #include <mkldnn_extension_utils.h>
+#include "details/caseless.hpp"
 
 using namespace mkldnn;
 using namespace MKLDNNPlugin;
 using namespace InferenceEngine;
+using namespace InferenceEngine::details;
 
-MKLDNNDepthwiseNode::MKLDNNDepthwiseNode(InferenceEngine::CNNLayerPtr layer, const mkldnn::engine& eng) : MKLDNNNode(layer, eng) {
+MKLDNNDepthwiseNode::MKLDNNDepthwiseNode(InferenceEngine::CNNLayerPtr layer, const mkldnn::engine& eng, int socket)
+        : MKLDNNNode(layer, eng, socket) {
     internalBlobDesc.emplace_back([&](primitive_desc_iterator &primitive_desc_it, size_t idx) -> MKLDNNMemoryDesc {
         return MKLDNNMemoryDesc(primitive_desc_it.weights_primitive_desc(0).desc());
     });
@@ -34,12 +36,28 @@ void MKLDNNDepthwiseNode::getSupportedDescriptors() {
 
     auto parentOutDims = getParentEdgeAt(0)->getDims();
 
+    if (getParentEdges().size() != 1)
+        THROW_IE_EXCEPTION << "Cannot create layer " << getName() << ": Incorrect number of inputs!";
+    if (parentOutDims != getChildEdgeAt(0)->getDims())
+        THROW_IE_EXCEPTION << "Cannot create layer " << getName() << ": Incorrect dimensions!";
+
     SizeVector weightDims = { (long unsigned int)parentOutDims[1] };
     MKLDNNDims blocked_weightDims(weightDims);
 
+    auto * wLayer = dynamic_cast<InferenceEngine::WeightableLayer*>(getCnnLayer().get());
+    if (wLayer == nullptr)
+        THROW_IE_EXCEPTION << "Cannot get weightable layer for node " << getName() << ".";
+
+    InferenceEngine::Blob::Ptr blb = wLayer->_weights;
+    if (blb)
+        realWeightSize = blb->size();
     internalBlobs.push_back(createInternalBlob(weightDims, true));
-    if (isWithBiases())
+    if (isWithBiases()) {
+        InferenceEngine::Blob::Ptr blb = wLayer->_biases;
+        if (blb)
+            realBiasSize = blb->size();
         internalBlobs.push_back(createInternalBlob(weightDims, false));
+    }
 
     for (auto format : getAvailableFormatsForDims(parentOutDims)) {
         MKLDNNMemoryDesc in_candidate{parentOutDims, inputDataType, format};
@@ -58,21 +76,32 @@ void MKLDNNDepthwiseNode::createPrimitive() {
     if (!srcMemPtr || !srcMemPtr->GetPrimitivePtr())
         THROW_IE_EXCEPTION << "Input memory didn't allocate.";
     if (getSelectedPrimitiveDescriptor() == nullptr)
-        THROW_IE_EXCEPTION << "Preferable primitive descriptor does not set.";
+        THROW_IE_EXCEPTION << "Preferable primitive descriptor is not set.";
 
     auto prim_desc = createPrimitiveDescriptor<depthwise_forward::primitive_desc, depthwise_forward::desc>();
 
     if (isBroadcast()) {
         float broadcastValue = static_cast<float*>(internalBlobMemory[0]->GetData())[0];
-        for (int i = 1; i < internalBlobMemory[0]->GetPrimitiveDescriptor().desc().data.dims[0]; i++) {
+        size_t blbSize = internalBlobMemory[0]->GetPrimitiveDescriptor().desc().data.dims[0];
+        for (int i = 1; i < blbSize && realWeightSize != blbSize; i++) {
             static_cast<float*>(internalBlobMemory[0]->GetData())[i] = broadcastValue;
         }
 
         if (isWithBiases()) {
+            blbSize = internalBlobMemory[1]->GetPrimitiveDescriptor().desc().data.dims[0];
             broadcastValue = static_cast<float*>(internalBlobMemory[1]->GetData())[0];
-            for (int i = 1; i < internalBlobMemory[1]->GetPrimitiveDescriptor().desc().data.dims[0]; i++) {
+            for (int i = 1; i < blbSize && realBiasSize != blbSize; i++) {
                 static_cast<float*>(internalBlobMemory[1]->GetData())[i] = broadcastValue;
             }
+        }
+    } else {
+        size_t blbSize = internalBlobMemory[0]->GetPrimitiveDescriptor().desc().data.dims[0];
+        if (realWeightSize != blbSize)
+            THROW_IE_EXCEPTION << "Cannot create layer " << getName() << ": Incorrect weights!";
+        if (isWithBiases()) {
+            blbSize = internalBlobMemory[1]->GetPrimitiveDescriptor().desc().data.dims[0];
+            if (realBiasSize != blbSize)
+                THROW_IE_EXCEPTION << "Cannot create layer " << getName() << ": Incorrect biases!";
         }
     }
 
@@ -100,6 +129,8 @@ void MKLDNNDepthwiseNode::initValues() {
     CaselessEq<std::string> comparator;
     if (comparator(depthwiseLayer->type, "ScaleShift")) {
         auto *scshLayer = dynamic_cast<ScaleShiftLayer*>(getCnnLayer().get());
+        if (scshLayer == nullptr)
+            THROW_IE_EXCEPTION << "Cannot get scale shift layer " << getName();
         if (scshLayer->_weights == nullptr)
             THROW_IE_EXCEPTION << "ScaleShift without weights is not supported";
 
@@ -108,6 +139,8 @@ void MKLDNNDepthwiseNode::initValues() {
         broadcast = static_cast<bool>(scshLayer->_broadcast);
     } else if (comparator(depthwiseLayer->type, "PReLU")) {
         auto *preluLayer = dynamic_cast<PReLULayer*>(getCnnLayer().get());
+        if (preluLayer == nullptr)
+            THROW_IE_EXCEPTION << "Cannot get PReLU layer " << getName();
         if (preluLayer->_weights == nullptr)
             THROW_IE_EXCEPTION << "PReLU without weights is not supported";
 
@@ -127,12 +160,6 @@ void MKLDNNDepthwiseNode::createDescriptor(const std::vector<InferenceEngine::Te
     MKLDNNMemoryDesc out_candidate(inputDesc[0]);
     MKLDNNDims weightDims({in_candidate.getDims()[1]});
 
-    if (in_candidate.getFormat() == memory::nChw16c) {
-        weightDims[0] = rnd_up(weightDims[0], 16);
-    } else if (in_candidate.getFormat() == memory::nChw8c) {
-        weightDims[0] = rnd_up(weightDims[0], 8);
-    }
-
     MKLDNNMemoryDesc wgh_candidate{weightDims, in_candidate.getDataType(), memory::x};
 
     if (isWithBiases()) {
@@ -148,7 +175,10 @@ void MKLDNNDepthwiseNode::createDescriptor(const std::vector<InferenceEngine::Te
 }
 
 void MKLDNNDepthwiseNode::initOptimalPrimitiveDescriptor() {
-    auto config = getSelectedPrimitiveDescriptor()->getConfig();
+    auto selected_pd = getSelectedPrimitiveDescriptor();
+    if (selected_pd == nullptr)
+        THROW_IE_EXCEPTION << "Preferable primitive descriptor is not set.";
+    auto config = selected_pd->getConfig();
     if (isInitConfig(config))
         return;
 

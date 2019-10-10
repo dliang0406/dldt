@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -9,7 +8,7 @@
 #include "xml_net_builder.hpp"
 #include "xml_helper.hpp"
 #include "pugixml.hpp"
-#include "inference_engine/v2_format_parser.h"
+#include "inference_engine/ie_format_parser.h"
 #include <fstream>
 #include <stdio.h>
 #include "details/ie_exception.hpp"
@@ -22,7 +21,7 @@ class V2TopologyVerificationTests : public ::testing::Test {
 protected:
     virtual void TearDown() {}
     virtual void SetUp() {
-        xmlHelper.reset(new XMLHelper(new details::V2FormatParser(2)));
+        xmlHelper.reset(new XMLHelper(new details::FormatParser(2)));
     }
 public:
     unique_ptr<CNNNetwork> cnnNetwork;
@@ -100,7 +99,7 @@ TEST_F(V2TopologyVerificationTests, testDefaultPrecisionsForFP16InputAndOutputLa
     InputsDataMap inputsDataMap;
     cnnNetworkImplPtr->getInputsInfo(inputsDataMap);
     for (auto inputData: inputsDataMap) {
-        ASSERT_TRUE(inputData.second->getInputPrecision() == Precision::FP32);
+        ASSERT_TRUE(inputData.second->getPrecision() == Precision::FP32);
     }
 }
 
@@ -123,7 +122,7 @@ TEST_F(V2TopologyVerificationTests, testDefaultPrecisionsFP32InputAndOutputLayer
     InputsDataMap inputsDataMap;
     cnnNetworkImplPtr->getInputsInfo(inputsDataMap);
     for (auto inputData: inputsDataMap) {
-        ASSERT_TRUE(inputData.second->getInputPrecision() == Precision::FP32);
+        ASSERT_TRUE(inputData.second->getPrecision() == Precision::FP32);
     }
 }
 
@@ -146,7 +145,7 @@ TEST_F(V2TopologyVerificationTests, testDefaultPrecisionsForQ78InputAndOutputLay
     InputsDataMap inputsDataMap;
     cnnNetworkImplPtr->getInputsInfo(inputsDataMap);
     for (auto inputData: inputsDataMap) {
-        ASSERT_TRUE(inputData.second->getInputPrecision() == Precision::I16);
+        ASSERT_TRUE(inputData.second->getPrecision() == Precision::I16);
     }
 }
 
@@ -197,12 +196,12 @@ TEST_F(V2TopologyVerificationTests, testMixedPrecisionIfLayerAndNetworkPrecision
     }
 }
 
-TEST_F(V2TopologyVerificationTests, cropDimIsIgnored) {
+TEST_F(V2TopologyVerificationTests, throwsIfCropDimIsTooBig) {
     CropData data = { 1, 0, 200 };
 
     string testContent = getNetworkWithCropLayer({ data });
     xmlHelper->loadContent(testContent);
-    ASSERT_NO_THROW(xmlHelper->parse());
+    ASSERT_THROW(xmlHelper->parse(), InferenceEngine::details::InferenceEngineException);
 }
 
 TEST_F(V2TopologyVerificationTests, testNoThrowWithProperCropParameters) {

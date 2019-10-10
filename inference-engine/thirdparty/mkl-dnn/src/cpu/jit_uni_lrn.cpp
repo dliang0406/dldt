@@ -26,23 +26,23 @@ namespace cpu {
 
 template <cpu_isa_t isa>
 jit_uni_lrn_fwd_t<isa>::jit_uni_lrn_fwd_t(
-    const pd_t *pd,
+    const pd_t *apd,
     const input_vector &inputs, const output_vector &outputs)
-    : cpu_primitive_t(&conf_, inputs, outputs), conf_(*pd), ker_(nullptr)
+    : cpu_primitive_t(apd, inputs, outputs), ker_(nullptr)
     , ker_first_(nullptr), ker_last_(nullptr)
 {
     using namespace alg_kind;
 
-    const int C = conf_.C();
-    const int H = conf_.H();
-    const int W = conf_.W();
-    const int ls = conf_.desc()->local_size;
-    float A = conf_.desc()->lrn_alpha / ls;
-    float K = conf_.desc()->lrn_k;
+    const int C = pd()->C();
+    const int H = pd()->H();
+    const int W = pd()->W();
+    const int ls = pd()->desc()->local_size;
+    float A = pd()->desc()->lrn_alpha / ls;
+    float K = pd()->desc()->lrn_k;
 
-    auto pk = conf_.desc()->prop_kind;
-    auto ak = conf_.desc()->alg_kind;
-    auto dfmt = conf_.src_pd()->desc()->format;
+    auto pk = pd()->desc()->prop_kind;
+    auto ak = pd()->desc()->alg_kind;
+    auto dfmt = pd()->src_pd()->desc()->format;
 
     if (dfmt == nChw8c && ls == 5 && ak == lrn_across_channels) {
         ker_ = new jit_uni_lrn_fwd_kernel_f32<isa>(
@@ -74,77 +74,65 @@ jit_uni_lrn_fwd_t<isa>::~jit_uni_lrn_fwd_t()
 { delete ker_; delete ker_first_; delete ker_last_; }
 
 template <cpu_isa_t isa>
-void jit_uni_lrn_fwd_t<isa>::execute_forward() {
+void jit_uni_lrn_fwd_t<isa>::execute_forward() const {
     using namespace alg_kind;
 
     auto src = reinterpret_cast<const data_t*>(this->input_memory(0));
     auto dst = reinterpret_cast<data_t*>(this->memory(0));
     auto ws = reinterpret_cast<data_t*>(this->memory(1));
 
-    const int N = conf_.MB();
-    const int C = conf_.C();
-    const int HW = conf_.H() * conf_.W();
-    const int ls = conf_.desc()->local_size;
+    const int N = pd()->MB();
+    const int C = pd()->C();
+    const int HW = pd()->H() * pd()->W();
+    const int ls = pd()->desc()->local_size;
 
-    auto ak = conf_.desc()->alg_kind;
-    auto dfmt = conf_.src_pd()->desc()->format;
+    auto ak = pd()->desc()->alg_kind;
+    auto dfmt = pd()->src_pd()->desc()->format;
 
     if (dfmt == nChw8c && ls == 5 && ak == lrn_across_channels) {
-#       pragma omp parallel for collapse(2) schedule(static)
-        for (int n = 0; n < N; ++n) {
-            for (int c8 = 0; c8 < C / VECTOR_LENGTH; ++c8) {
-                jit_args_fwd_t args;
-                args.src = &src[n*HW*C + c8 * HW * VECTOR_LENGTH];
-                args.dst = &dst[n*HW*C + c8 * HW * VECTOR_LENGTH];
-                args.scratch = &ws[n*HW*C + c8 * HW * VECTOR_LENGTH];
-                if (c8 == 0)
-                    (*ker_first_)(&args);
-                else if (c8 == C / VECTOR_LENGTH - 1)
-                    (*ker_last_)(&args);
-                else
-                    (*ker_)(&args);
-            }
-        }
+        parallel_nd(N, C / VECTOR_LENGTH, [&](int n, int c8) {
+            jit_args_fwd_t args;
+            args.src = &src[n*HW*C + c8 * HW * VECTOR_LENGTH];
+            args.dst = &dst[n*HW*C + c8 * HW * VECTOR_LENGTH];
+            args.scratch = &ws[n*HW*C + c8 * HW * VECTOR_LENGTH];
+            if (c8 == 0)
+                (*ker_first_)(&args);
+            else if (c8 == C / VECTOR_LENGTH - 1)
+                (*ker_last_)(&args);
+            else
+                (*ker_)(&args);
+        });
     }
     else if (dfmt == nChw8c && ak == lrn_within_channel) {
-#       pragma omp parallel for collapse(2) schedule(static)
-        for (int n = 0; n < N; ++n) {
-            for (int c8 = 0; c8 < C / VECTOR_LENGTH; ++c8) {
-                jit_args_fwd_t args;
-                args.src = &src[n*HW*C + c8 * HW * VECTOR_LENGTH];
-                args.dst = &dst[n*HW*C + c8 * HW * VECTOR_LENGTH];
-                args.scratch = &ws[n*HW*C + c8 * HW * VECTOR_LENGTH];
-                (*ker_)(&args);
-            }
-        }
+        parallel_nd(N, C / VECTOR_LENGTH, [&](int n, int c8) {
+            jit_args_fwd_t args;
+            args.src = &src[n*HW*C + c8 * HW * VECTOR_LENGTH];
+            args.dst = &dst[n*HW*C + c8 * HW * VECTOR_LENGTH];
+            args.scratch = &ws[n*HW*C + c8 * HW * VECTOR_LENGTH];
+            (*ker_)(&args);
+        });
     }
     else if (dfmt == nchw && ls == 5 && ak == lrn_across_channels) {
-#       pragma omp parallel for collapse(2) schedule(static)
-        for (int n = 0; n < N; ++n) {
-            for (int hw8 = 0; hw8 < (HW + VECTOR_LENGTH - 1) / VECTOR_LENGTH;
-                ++hw8) {
-                jit_args_fwd_t args;
-                args.src = &src[n*HW*C + hw8 * VECTOR_LENGTH];
-                args.dst = &dst[n*HW*C + hw8 * VECTOR_LENGTH];
-                args.scratch = &ws[n*HW*C + hw8 * VECTOR_LENGTH];
-                if ((hw8 + 1)*VECTOR_LENGTH > HW)
-                    (*ker_last_)(&args);
-                else
-                    (*ker_)(&args);
-            }
-        }
+        parallel_nd(N, (HW + VECTOR_LENGTH - 1) / VECTOR_LENGTH,
+            [&](int n, int hw8) {
+            jit_args_fwd_t args;
+            args.src = &src[n*HW*C + hw8 * VECTOR_LENGTH];
+            args.dst = &dst[n*HW*C + hw8 * VECTOR_LENGTH];
+            args.scratch = &ws[n*HW*C + hw8 * VECTOR_LENGTH];
+            if ((hw8 + 1)*VECTOR_LENGTH > HW)
+                (*ker_last_)(&args);
+            else
+                (*ker_)(&args);
+        });
     }
     else { // nhwc
-#       pragma omp parallel for collapse(2) schedule(static)
-        for (int n = 0; n < N; ++n) {
-            for (int hw = 0; hw < HW; ++hw) {
-                jit_args_fwd_t args;
-                args.src = &src[n*HW*C + hw * C];
-                args.dst = &dst[n*HW*C + hw * C];
-                args.scratch = &ws[n*HW*C + hw * C];
-                (*ker_)(&args);
-            }
-        }
+        parallel_nd(N, HW, [&](int n, int hw) {
+            jit_args_fwd_t args;
+            args.src = &src[n*HW*C + hw * C];
+            args.dst = &dst[n*HW*C + hw * C];
+            args.scratch = &ws[n*HW*C + hw * C];
+            (*ker_)(&args);
+        });
     }
 }
 
@@ -161,6 +149,7 @@ status_t jit_uni_lrn_fwd_t<isa>::pd_t::init() {
     bool ok = true
         && one_of(desc()->prop_kind, forward_training, forward_inference)
         && everyone_is(data_type::f32, desc()->data_desc.data_type)
+        && !has_zero_dim_memory()
         && data_d.ndims() == 4
         && data_d.dims()[1] % VECTOR_LENGTH == 0
         && data_d.dims()[1] >= 2 * VECTOR_LENGTH
@@ -188,18 +177,18 @@ status_t jit_uni_lrn_fwd_t<isa>::pd_t::init() {
 }
 
 template <cpu_isa_t isa>
-jit_uni_lrn_bwd_t<isa>::jit_uni_lrn_bwd_t(const pd_t *pd,
+jit_uni_lrn_bwd_t<isa>::jit_uni_lrn_bwd_t(const pd_t *apd,
     const input_vector &inputs, const output_vector &outputs)
-    : cpu_primitive_t(&conf_, inputs, outputs), conf_(*pd)
+    : cpu_primitive_t(apd, inputs, outputs)
     , ker_(nullptr), ker_first_(nullptr), ker_last_(nullptr)
 {
     using namespace alg_kind;
-    const int C = conf_.C();
-    const int H = conf_.H();
-    const int W = conf_.W();
-    const int ls = conf_.desc()->local_size;
-    float A = conf_.desc()->lrn_alpha / ls;
-    float B = conf_.desc()->lrn_beta;
+    const int C = pd()->C();
+    const int H = pd()->H();
+    const int W = pd()->W();
+    const int ls = pd()->desc()->local_size;
+    float A = pd()->desc()->lrn_alpha / ls;
+    float B = pd()->desc()->lrn_beta;
 
     int use_h_parallelizm = 0;// XXX
     if (C / VECTOR_LENGTH == 1) {
@@ -223,62 +212,54 @@ jit_uni_lrn_bwd_t<isa>::~jit_uni_lrn_bwd_t()
 }
 
 template <cpu_isa_t isa>
-void jit_uni_lrn_bwd_t<isa>::execute_backward() {
+void jit_uni_lrn_bwd_t<isa>::execute_backward() const {
     auto src = reinterpret_cast<const data_t *>(this->input_memory(0));
     auto diff_dst = reinterpret_cast<const data_t *>(this->input_memory(1));
     auto ws = reinterpret_cast<const data_t*>(this->input_memory(2));
     auto diff_src = reinterpret_cast<data_t*>(this->memory(0));
 
-    const int N = conf_.MB();
-    const int C = conf_.C();
-    const int H = conf_.H();
-    const int W = conf_.W();
+    const int N = pd()->MB();
+    const int C = pd()->C();
+    const int H = pd()->H();
+    const int W = pd()->W();
 
     int use_h_parallelizm = 0; // XXX
     if (use_h_parallelizm) {
-#       pragma omp parallel for collapse(3) schedule(static)
-        for (int n = 0; n < N; ++n) {
-            for (int c8 = 0; c8 < C / VECTOR_LENGTH; ++c8) {
-                for (int h = 0; h < H; ++h) {
-                    auto offset = n*C*H*W + c8*H*W*VECTOR_LENGTH
-                        + h*W*VECTOR_LENGTH;
-                    jit_args_bwd_t args;
-                    args.src = &src[offset];
-                    args.diff_dst = &diff_dst[offset];
-                    args.scratch = &ws[offset];
-                    args.diff_src = &diff_src[offset];
-                    if (C / VECTOR_LENGTH == 1)
-                        (*ker_)(&args);
-                    else if (c8 == 0)
-                        (*ker_first_)(&args);
-                    else if (c8 == C / VECTOR_LENGTH - 1)
-                        (*ker_last_)(&args);
-                    else
-                        (*ker_)(&args);
-                }
-            }
-        }
+        parallel_nd(N, C / VECTOR_LENGTH, H, [&](int n, int c8, int h) {
+            auto offset = n*C*H*W + c8*H*W*VECTOR_LENGTH
+                + h*W*VECTOR_LENGTH;
+            jit_args_bwd_t args;
+            args.src = &src[offset];
+            args.diff_dst = &diff_dst[offset];
+            args.scratch = &ws[offset];
+            args.diff_src = &diff_src[offset];
+            if (C / VECTOR_LENGTH == 1)
+                (*ker_)(&args);
+            else if (c8 == 0)
+                (*ker_first_)(&args);
+            else if (c8 == C / VECTOR_LENGTH - 1)
+                (*ker_last_)(&args);
+            else
+                (*ker_)(&args);
+        });
     }
     else {
-#       pragma omp parallel for collapse(2) schedule(static)
-        for (int n = 0; n < N; ++n) {
-            for (int c8 = 0; c8 < C / VECTOR_LENGTH; ++c8) {
-                auto offset = n*C*H*W + c8*H*W*VECTOR_LENGTH;
-                jit_args_bwd_t args;
-                args.src = &src[offset];
-                args.diff_dst = &diff_dst[offset];
-                args.scratch = &ws[offset];
-                args.diff_src = &diff_src[offset];
-                if (C / VECTOR_LENGTH == 1)
-                    (*ker_)(&args);
-                else if (c8 == 0)
-                    (*ker_first_)(&args);
-                else if (c8 == C / VECTOR_LENGTH - 1)
-                    (*ker_last_)(&args);
-                else
-                    (*ker_)(&args);
-            }
-        }
+        parallel_nd(N, C / VECTOR_LENGTH, [&](int n, int c8) {
+            auto offset = n*C*H*W + c8*H*W*VECTOR_LENGTH;
+            jit_args_bwd_t args;
+            args.src = &src[offset];
+            args.diff_dst = &diff_dst[offset];
+            args.scratch = &ws[offset];
+            args.diff_src = &diff_src[offset];
+            if (C / VECTOR_LENGTH == 1)
+                (*ker_)(&args);
+            else if (c8 == 0)
+                (*ker_first_)(&args);
+            else if (c8 == C / VECTOR_LENGTH - 1)
+                (*ker_last_)(&args);
+            else
+                (*ker_)(&args);
+        });
     }
 }
 
@@ -295,6 +276,7 @@ status_t jit_uni_lrn_bwd_t<isa>::pd_t::init() {
     bool ok = true
         && utils::one_of(desc()->prop_kind, backward, backward_data)
         && utils::everyone_is(data_type::f32, desc()->data_desc.data_type)
+        && !has_zero_dim_memory()
         && data_d.ndims() == 4
         && data_d.dims()[1] % VECTOR_LENGTH == 0
         && desc()->lrn_beta == 0.75

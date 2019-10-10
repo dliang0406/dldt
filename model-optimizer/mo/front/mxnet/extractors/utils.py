@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -16,6 +16,9 @@
 
 import mxnet as mx
 
+from mo.graph.graph import Node, Graph
+from mo.ops.const import Const
+from extensions.ops.elementwise import Elementwise
 from mo.utils.error import Error
 from mo.utils.str_to import StrTo
 from mo.utils.utils import refer_to_faq_msg
@@ -47,8 +50,6 @@ class AttrDictionary(object):
                 raise ValueError("Missing required parameter: " + key)
         if key in self._dict:
             return self._dict[key]
-        if default is None:
-            raise ValueError("Missing required parameter: " + key)
         return default
 
     def bool(self, key, default=None):
@@ -68,7 +69,11 @@ class AttrDictionary(object):
 
     def tuple(self, key, valtype=str, default=None):
         attr = self.str(key, default)
+        if attr is None:
+            return default
         if isinstance(attr, str):
+            if (not '(' in attr and not ')' in attr) and (not '[' in attr and not ']' in attr):
+                return (valtype(attr),)
             if (not attr) or (not attr[1:-1].split(',')[0]):
                 return tuple([valtype(x) for x in default])
             return StrTo.tuple(valtype, attr)
@@ -85,10 +90,11 @@ class AttrDictionary(object):
 
     def val(self, key, valtype, default=None):
         attr = self.str(key, default)
+        attr = None if attr == 'None' else attr
         if valtype is None:
             return attr
         else:
-            if not isinstance(attr, valtype):
+            if not isinstance(attr, valtype) and attr is not None:
                 return valtype(attr)
             else:
                 return attr
@@ -104,9 +110,10 @@ def get_mxnet_node_edges(node: dict, node_id: [int, str], nodes_list: list, inde
     edge_list = []
     for in_port, src_node_id in enumerate(node['inputs']):
         src_node = src_node_id[0]
+        dest_port = src_node_id[1]
         edge_attrs = {
             'in': in_port,
-            'out': 0,  # TODO Check if src_node_id[1] should be here (already used as fw_tensor_debug_info)
+            'out': dest_port,
             # debug anchor for name of tensor consumed at this input port
             'fw_tensor_debug_info': [(nodes_list[src_node]['name'], src_node_id[1])],
             'in_attrs': ['in'],
@@ -152,6 +159,9 @@ def load_params(input_model, data_names = ('data',)):
             elif len(keys)>1 and 'arg' == keys[0]:
                 arg_keys.append(keys[1])
                 arg_params[keys[1]] = loaded_weight[key]
+            else:
+                arg_keys.append(key)
+                arg_params[key] = loaded_weight[key]
     elif file_format == 'nd':
         for key in loaded_weight:
             if 'auxs' in input_model:
@@ -172,3 +182,26 @@ def load_params(input_model, data_names = ('data',)):
     model_params._param_names = arg_keys
     model_params._aux_names = aux_keys
     return model_params
+
+
+def init_rnn_states(model_nodes):
+    states = {}
+    for i, node in enumerate(model_nodes):
+        if node['op'] == 'RNN':
+            for i in node['inputs'][2:]:
+                attrs = get_mxnet_layer_attrs(model_nodes[i[0]])
+                shape = attrs.tuple('__shape__', int, None)
+                if shape:
+                    states.update({model_nodes[i[0]]['name']: shape})
+    return states
+
+
+def scalar_ops_replacer(graph: Graph, node: Node, elementwise_op_type=Elementwise):
+    scalar_value = Const(graph, dict(value=node.scalar,
+                                     symbol_dict={'name': node.id + '/const'})).create_node()
+    lin_node = elementwise_op_type(graph, dict(name=node.id + '/lin_', symbol_dict={'name': node.id + '/lin_'})
+                                   ).create_node()
+    node.in_port(0).get_connection().set_destination(lin_node.in_port(0))
+    lin_node.in_port(1).get_connection().set_source(scalar_value.out_port(0))
+    node.out_port(0).get_connection().set_source(lin_node.out_port(0))
+    return lin_node

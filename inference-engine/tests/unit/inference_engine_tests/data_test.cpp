@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -92,4 +91,28 @@ TEST_F(DataTests, canSetNotEmptyDimsForBlockingDescBlocked) {
 
 TEST_F(DataTests, canSetNotEmptyDimsForBlockingDescNCHW) {
     ASSERT_NO_THROW(BlockingDesc(notEmptyDims, NCHW));
+}
+
+TEST_F(DataTests, setPrecision) {
+    Data data(data_name, emptyDims, Precision::FP32, Layout::NCHW);
+
+    IE_SUPPRESS_DEPRECATED_START
+    EXPECT_EQ(Precision::FP32, data.precision);
+    IE_SUPPRESS_DEPRECATED_END
+    EXPECT_EQ(Precision::FP32, data.getPrecision());
+    EXPECT_EQ(Precision::FP32, data.getTensorDesc().getPrecision());
+
+    data.setPrecision(Precision::FP16);
+    IE_SUPPRESS_DEPRECATED_START
+    EXPECT_EQ(Precision::FP16, data.precision);
+    IE_SUPPRESS_DEPRECATED_END
+    EXPECT_EQ(Precision::FP16, data.getPrecision());
+    EXPECT_EQ(Precision::FP16, data.getTensorDesc().getPrecision());
+
+    IE_SUPPRESS_DEPRECATED_START
+    data.precision = Precision::Q78;
+    EXPECT_EQ(Precision::Q78, data.precision);
+    IE_SUPPRESS_DEPRECATED_END
+    EXPECT_EQ(Precision::Q78, data.getPrecision());
+    EXPECT_EQ(Precision::Q78, data.getTensorDesc().getPrecision());
 }

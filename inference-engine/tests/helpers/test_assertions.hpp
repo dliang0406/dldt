@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -82,7 +81,7 @@ inline void compare_inputs_info (const InferenceEngine::InputsDataMap & lhs, con
 
     for (int k =0; k != lhs.size(); k++, i++, j++) {
         ASSERT_STREQ(i->first.c_str(), j->first.c_str());
-        ASSERT_DIMS_EQ(i->second->getDims(), j->second->getDims());
+        ASSERT_DIMS_EQ(i->second->getTensorDesc().getDims(), j->second->getTensorDesc().getDims());
         ASSERT_PREPROCESS_INFO_EQ(i->second->getPreProcess(), j->second->getPreProcess());
         ASSERT_DATA_EQ(*i->second->getInputData().get(), *j->second->getInputData().get());
     }

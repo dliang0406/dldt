@@ -44,7 +44,7 @@ void simple_net()
     memory::dims conv_bias_tz = { 96 };
     memory::dims conv_dst_tz = { batch, 96, 55, 55 };
     memory::dims conv_strides = { 4, 4 };
-    auto conv_padding = { 0, 0 };
+    memory::dims conv_padding = { 0, 0 };
 
     std::vector<float> conv_weights(
             std::accumulate(conv_weights_tz.begin(), conv_weights_tz.end(), 1,
@@ -127,7 +127,7 @@ void simple_net()
     /* AlexNet: relu
      * {batch, 96, 55, 55} -> {batch, 96, 55, 55}
      */
-    const float negative_slope = 1.0;
+    const float negative_slope = 1.0f;
 
     /* create relu primitive desc */
     /* keep memory format of source same as the format of convolution
@@ -151,9 +151,9 @@ void simple_net()
      * k: 1.0
      */
     const uint32_t local_size = 5;
-    const float alpha = 0.0001;
-    const float beta = 0.75;
-    const float k = 1.0;
+    const float alpha = 0.0001f;
+    const float beta = 0.75f;
+    const float k = 1.0f;
 
     /* create a lrn primitive descriptor */
     auto lrn_desc = lrn_forward::desc(prop_kind::forward, lrn_across_channels,
@@ -180,7 +180,7 @@ void simple_net()
     memory::dims pool_dst_tz = { batch, 96, 27, 27 };
     memory::dims pool_kernel = { 3, 3 };
     memory::dims pool_strides = { 2, 2 };
-    auto pool_padding = { 0, 0 };
+    memory::dims pool_padding = { 0, 0 };
 
     /* create memory for pool dst data in user format */
     auto pool_user_dst_memory = memory(

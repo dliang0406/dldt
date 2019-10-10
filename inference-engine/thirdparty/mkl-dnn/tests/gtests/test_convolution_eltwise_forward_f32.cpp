@@ -16,44 +16,30 @@
 
 #include "mkldnn_test_common.hpp"
 #include "gtest/gtest.h"
-
+#include "math_utils.hpp"
 #include "mkldnn.hpp"
 #include "test_convolution_eltwise_forward_common.hpp"
+
 namespace mkldnn {
 
 using convolution_test = convolution_eltwise_test<float, float, float, float>;
 
-TEST_P(convolution_test, TestConvolution)
+TEST_P(convolution_test, TestConvolutionEltwise)
 {
 }
-
-#define FP32
-#define DIRECTION_FORWARD
-#define FMT_BIAS x
-#define FMT_NO_BIAS format_undef
-#define FMT_DATA_BLOCKED nChw8c
-#define FMT_DATA_BLOCKED16 nChw16c
 
 #define EXPAND_FORMATS(src, weights, bias, dst) \
     { mkldnn::memory::format::src, mkldnn::memory::format::weights, \
     mkldnn::memory::format::bias, mkldnn::memory::format::dst }
-
-#define FMT_WEIGHTS_BLOCKED OIhw8i8o
-#define FMT_WEIGHTS_BLOCKED16 OIhw16i16o
-
-#define ENGINE mkldnn::engine::kind::cpu
-#define ALGORITHM mkldnn::convolution_direct
 
 #define CONCAT_WITH_UNDERSCORE_(a,b) a ## _ ## b
 #define CONCAT_WITH_UNDERSCORE(a,b) CONCAT_WITH_UNDERSCORE_(a,b)
 
 #define INST_TEST_CASE_(str, ...) INSTANTIATE_TEST_CASE_P( \
         str, convolution_test, ::testing::Values(__VA_ARGS__))
-//#define INST_TEST_CASE(str, ...) INST_TEST_CASE_(
-//        CONCAT_WITH_UNDERSCORE(TEST_CASE_NAME_PREFIX, str), __VA_ARGS__)
 
 #define INST_TEST_CASE(str, ...) INST_TEST_CASE_( \
-        CONCAT_WITH_UNDERSCORE(CONCAT_WITH_UNDERSCORE(TEST_CASE_NAME_PREFIX, \
+        CONCAT_WITH_UNDERSCORE(CONCAT_WITH_UNDERSCORE(Convolution, \
         str), eltwise),  __VA_ARGS__)
 
 #define EXPAND_ARGS(args) args
@@ -68,51 +54,47 @@ TEST_P(convolution_test, TestConvolution)
     EXPAND_ARGS(PARAMS_CONV(eltwise_linear, __VA_ARGS__)), \
     EXPAND_ARGS(PARAMS_CONV(eltwise_bounded_relu, __VA_ARGS__)), \
     EXPAND_ARGS(PARAMS_CONV(eltwise_soft_relu, __VA_ARGS__)), \
-    EXPAND_ARGS(PARAMS_CONV(eltwise_logistic, __VA_ARGS__)), \
-    EXPAND_ARGS(PARAMS_CONV(eltwise_clamp, __VA_ARGS__))
+    EXPAND_ARGS(PARAMS_CONV(eltwise_logistic, __VA_ARGS__))
 
-#undef ELTWISE_ALPHA
 #define ELTWISE_ALPHA 0.5f
-
-#undef ELTWISE_BETA
-#define ELTWISE_BETA 0.5f
+#define ELTWISE_BETA 1.5f
 
 #define PARAMS_CONV(alg, src, weights, bias, dst, ...) \
-    test_convolution_eltwise_params_t {alg,  ENGINE, ALGORITHM, ELTWISE_ALPHA, ELTWISE_BETA, \
+    test_convolution_eltwise_params_t {alg,  mkldnn::engine::kind::cpu, \
+        mkldnn::convolution_direct, ELTWISE_ALPHA, ELTWISE_BETA, \
     EXPAND_FORMATS(src, weights, bias, dst), /* empty attributes */ {}, \
     {__VA_ARGS__} }
 
     INST_TEST_CASE(SimpleSmall,
-                   PARAMS(nchw, oihw, FMT_BIAS, nchw,
-                          2, 1, 32, 13, 13, 48, 11, 11, 3, 3, 0, 0, 1, 1),
-                   PARAMS(nchw, oihw, FMT_BIAS, nchw,
-                          2, 1, 16, 13, 13, 48, 13, 13, 1, 1, 0, 0, 1, 1),
-                   PARAMS(nchw, goihw, FMT_BIAS, nchw,
-                          2, 64, 64, 16, 16, 64, 16, 16, 3, 3, 0, 0, 1, 1),
-                   PARAMS(nchw, goihw, FMT_BIAS, nchw,
-                          2, 32, 32, 9, 9, 32, 9, 9, 1, 1, 0, 0, 1, 1)
+        PARAMS(nchw, oihw, x, nchw, 2, 1, 32, 13, 13, 48, 11, 11, 3, 3, 0, 0, 1, 1),
+        PARAMS(nchw, oihw, x, nchw, 2, 1, 16, 13, 13, 48, 13, 13, 1, 1, 0, 0, 1, 1),
+        PARAMS(nchw, goihw, x, nchw, 2, 64, 64, 16, 16, 64, 16, 16, 3, 3, 0, 0, 1, 1),
+        PARAMS(nchw, goihw, x, nchw, 2, 32, 32, 9, 9, 32, 9, 9, 1, 1, 0, 0, 1, 1)
     );
 
     INST_TEST_CASE(SimpleSmall_Blocked,
-                   PARAMS(FMT_DATA_BLOCKED, FMT_WEIGHTS_BLOCKED, FMT_BIAS, FMT_DATA_BLOCKED,
-                          2, 1, 32, 13, 13, 48, 11, 11, 3, 3, 0, 0, 1, 1),
-                   PARAMS(FMT_DATA_BLOCKED, FMT_WEIGHTS_BLOCKED, FMT_BIAS, FMT_DATA_BLOCKED,
-                          2, 1, 16, 13, 13, 48, 13, 13, 1, 1, 0, 0, 1, 1),
-                   PARAMS(FMT_DATA_BLOCKED, Goihw8g, FMT_BIAS, FMT_DATA_BLOCKED,
-                          2, 64, 64, 16, 16, 64, 16, 16, 3, 3, 0, 0, 1, 1),
-                   PARAMS(FMT_DATA_BLOCKED, Goihw8g, FMT_BIAS, FMT_DATA_BLOCKED,
-                          2, 32, 32, 9, 9, 32, 9, 9, 1, 1, 0, 0, 1, 1)
+        PARAMS(nChw8c, Goihw8g, x, nChw8c, 1, 8, 8, 5, 5, 8, 5, 5, 3, 3, 1, 1, 1, 1),
+        PARAMS(nChw8c, OIhw8i8o, x, nChw8c, 1, 1, 48, 20, 20, 48, 20, 20, 1, 1, 0, 0, 1, 1),
+        PARAMS(nChw8c, OIhw8i8o, x, nChw8c, 1, 1, 48, 20, 20, 48, 20, 20, 3, 3, 0, 0, 1, 1)
+    );
+
+    INST_TEST_CASE(SimpleSmall_Blocked_Tail,
+        PARAMS(nChw8c, Goihw8g, x, nChw8c, 1, 47, 47, 20, 20, 47, 20, 20, 3, 3, 1, 1, 1, 1),
+        PARAMS(nChw8c, OIhw8i8o, x, nChw8c, 1, 1, 47, 20, 20, 47, 20, 20, 1, 1, 0, 0, 1, 1),
+        PARAMS(nChw8c, OIhw8i8o, x, nChw8c, 1, 1, 47, 20, 20, 47, 20, 20, 3, 3, 0, 0, 1, 1)
     );
 
     INST_TEST_CASE(SimpleSmall_Blocked16,
-                   PARAMS(FMT_DATA_BLOCKED16, FMT_WEIGHTS_BLOCKED16, FMT_BIAS, FMT_DATA_BLOCKED16,
-                          2, 1, 32, 13, 13, 48, 11, 11, 3, 3, 0, 0, 1, 1),
-                   PARAMS(FMT_DATA_BLOCKED16, FMT_WEIGHTS_BLOCKED16, FMT_BIAS, FMT_DATA_BLOCKED16,
-                          2, 1, 16, 13, 13, 48, 13, 13, 1, 1, 0, 0, 1, 1),
-                   PARAMS(FMT_DATA_BLOCKED16, Goihw16g, FMT_BIAS, FMT_DATA_BLOCKED16,
-                          2, 64, 64, 16, 16, 64, 16, 16, 3, 3, 0, 0, 1, 1),
-                   PARAMS(FMT_DATA_BLOCKED16, Goihw16g, FMT_BIAS, FMT_DATA_BLOCKED16,
-                          2, 32, 32, 9, 9, 32, 9, 9, 1, 1, 0, 0, 1, 1)
+        PARAMS(nChw16c, Goihw16g, x, nChw16c, 1, 48, 48, 20, 20, 48, 20, 20, 3, 3, 1, 1, 1, 1),
+        PARAMS(nChw16c, OIhw16i16o, x, nChw16c, 1, 1, 48, 20, 20, 48, 20, 20, 1, 1, 0, 0, 1, 1),
+        PARAMS(nChw16c, OIhw16i16o, x, nChw16c, 1, 1, 48, 20, 20, 48, 20, 20, 3, 3, 0, 0, 1, 1),
+        PARAMS(nChw16c, OIhw16i16o, x, nChw16c, 2, 1, 32, 32, 32, 32, 32, 32, 3, 3, 0, 0, 1, 1)
     );
 
+    INST_TEST_CASE(SimpleSmall_Blocked16_Tail,
+        PARAMS(nChw16c, Goihw16g, x, nChw16c, 1, 47, 47, 20, 20, 47, 20, 20, 3, 3, 1, 1, 1, 1),
+        PARAMS(nChw16c, OIhw16i16o, x, nChw16c, 1, 1, 47, 20, 20, 47, 20, 20, 1, 1, 0, 0, 1, 1),
+        PARAMS(nChw16c, OIhw16i16o, x, nChw16c, 1, 1, 47, 20, 20, 47, 20, 20, 3, 3, 0, 0, 1, 1),
+        PARAMS(nChw16c, OIhw16i16o, x, nChw16c, 2, 1, 32, 32, 32, 32, 32, 32, 3, 3, 0, 0, 1, 1)
+    );
 }

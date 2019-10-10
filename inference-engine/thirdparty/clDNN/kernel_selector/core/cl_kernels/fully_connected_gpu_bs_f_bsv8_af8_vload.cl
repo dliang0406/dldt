@@ -14,6 +14,7 @@
 
 
 #include "include/include_all.cl"
+#include "include/sub_group.cl"
 
 #if FP16_UNIT_USED
     // Block read - currently block is 4 bytes aligned.
@@ -171,23 +172,23 @@ KERNEL (fully_connected_gpu_xb_bs_xs_xsv8_bsv8_vload)(
 
 #endif // #if NEURONS_PER_WORK_ITEM > 1
 #endif // #if BIAS_TERM
-    blockC00 = ACTIVATION(blockC00, NL_M, NL_N);
+    blockC00 = ACTIVATION(blockC00, ACTIVATION_PARAMS);
 #if BATCHES_PER_WORK_ITEM >= 16
-    blockC01 = ACTIVATION(blockC01, NL_M, NL_N);
+    blockC01 = ACTIVATION(blockC01, ACTIVATION_PARAMS);
 #if BATCHES_PER_WORK_ITEM >= 32
-    blockC02 = ACTIVATION(blockC02, NL_M, NL_N);
-    blockC03 = ACTIVATION(blockC03, NL_M, NL_N);
+    blockC02 = ACTIVATION(blockC02, ACTIVATION_PARAMS);
+    blockC03 = ACTIVATION(blockC03, ACTIVATION_PARAMS);
 #endif
 #endif
 
 #if NEURONS_PER_WORK_ITEM > 1
 
-    blockC10 = ACTIVATION(blockC10, NL_M, NL_N);
+    blockC10 = ACTIVATION(blockC10, ACTIVATION_PARAMS);
 #if BATCHES_PER_WORK_ITEM >= 16
-    blockC11 = ACTIVATION(blockC11, NL_M, NL_N);
+    blockC11 = ACTIVATION(blockC11, ACTIVATION_PARAMS);
 #if BATCHES_PER_WORK_ITEM >= 32
-    blockC12 = ACTIVATION(blockC12, NL_M, NL_N);
-    blockC13 = ACTIVATION(blockC13, NL_M, NL_N);
+    blockC12 = ACTIVATION(blockC12, ACTIVATION_PARAMS);
+    blockC13 = ACTIVATION(blockC13, ACTIVATION_PARAMS);
 #endif
 #endif
 
@@ -224,7 +225,4 @@ KERNEL (fully_connected_gpu_xb_bs_xs_xsv8_bsv8_vload)(
 
 #undef SUB_GROUP_SIZE
 #undef ALIGNED_BLOCK_READ8
-#undef MAKE_VECTOR_TYPE
-#undef CONCAT_TOKEN
-#undef CONCAT_TOKEN_HANDLER1
 #undef MULTIPLY_BLOCKS_8x8

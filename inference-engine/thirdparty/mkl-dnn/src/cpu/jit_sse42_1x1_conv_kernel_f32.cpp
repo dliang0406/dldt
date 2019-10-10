@@ -34,15 +34,14 @@ using namespace mkldnn::impl::utils;
 
 using namespace Xbyak;
 
-void jit_sse42_1x1_conv_kernel_f32::bcast_loop(int load_loop_blk,
-        char load_loop_tag)
+void jit_sse42_1x1_conv_kernel_f32::generate_bcast_loop(int load_loop_blk)
 {
     mov(aux1_reg_bcast_data, reg_bcast_data);
     mov(aux_reg_output_data, reg_output_data);
     mov(bcast_loop_iter, reg_bcast_loop_work);
 
-    jit_tagged_label bcast_loop("bcast_loop", load_loop_tag);
-    jit_tagged_label bcast_loop_tail("bcast_loop_tail", load_loop_tag);
+    Label bcast_loop;
+    Label bcast_loop_tail;
 
     cmp(bcast_loop_iter, jcp.ur);
     jl(bcast_loop_tail, T_NEAR);
@@ -52,7 +51,7 @@ void jit_sse42_1x1_conv_kernel_f32::bcast_loop(int load_loop_blk,
         int num_substeps = jcp.bcast_block / jcp.ur;
         assert(num_substeps > 0 && num_substeps < 10);
         for (int i = 0; i < num_substeps; i++) {
-            reduce_loop(load_loop_blk, jcp.ur, load_loop_tag, '0' + i);
+            generate_reduce_loop(load_loop_blk, jcp.ur);
             if (i < num_substeps - 1) {
                 add(aux1_reg_bcast_data, jcp.bcast_loop_bcast_substep);
                 add(aux_reg_output_data, jcp.bcast_loop_output_substep);
@@ -70,24 +69,23 @@ void jit_sse42_1x1_conv_kernel_f32::bcast_loop(int load_loop_blk,
 
     L(bcast_loop_tail);
     if (jcp.ur_tail) {
-        jit_tagged_label bcast_loop_tail_out(
-                "bcast_loop_tail_out", load_loop_tag);
+        Label bcast_loop_tail_out;
         cmp(bcast_loop_iter, 0);
         jz(bcast_loop_tail_out, T_NEAR);
-        reduce_loop(load_loop_blk, jcp.ur_tail, load_loop_tag, '1');
+        generate_reduce_loop(load_loop_blk, jcp.ur_tail);
         L(bcast_loop_tail_out);
     }
 }
 
-void jit_sse42_1x1_conv_kernel_f32::reduce_loop(int load_loop_blk, int ur,
-        char load_loop_tag, char bcast_loop_tag)
+void jit_sse42_1x1_conv_kernel_f32::generate_reduce_loop(
+        int load_loop_blk, int ur)
 {
     auto reg_load = [=](int i, int n) {
         return Xmm(2*ur * load_loop_blk + 2*i + n + 1);
     };
 
     auto reg_accum = [=](int i, int j, int n) {
-        return Xmm(2*j * load_loop_blk + 2*i + n + 1);
+        return Xmm(n*load_loop_blk*ur + i*ur + j + 1);
     };
 
     auto bias_ptr = [=](int i, int n) {
@@ -141,7 +139,7 @@ void jit_sse42_1x1_conv_kernel_f32::reduce_loop(int load_loop_blk, int ur,
         default:
             if (jcp.with_dw_conv)
                 return ptr[aux_reg_output_data +
-                           (i * jcp.dw_conv_ker_h * jcp.ow + j) * jcp.oc_block * sizeof(float) + n*4*sizeof(float)];
+                           (i * jcp_dw.kh * jcp.ow + j) * jcp.oc_block * sizeof(float) + n*4*sizeof(float)];
             else
                 return ptr[aux_reg_output_data +
                     (i * jcp.os + j) * jcp.oc_block * sizeof(float) + n*4*sizeof(float)];
@@ -149,8 +147,8 @@ void jit_sse42_1x1_conv_kernel_f32::reduce_loop(int load_loop_blk, int ur,
     };
 
     auto init = [=]() {
-        jit_tagged_label init_done("init_done", load_loop_tag, bcast_loop_tag);
-        jit_tagged_label init_zero("init_zero", load_loop_tag, bcast_loop_tag);
+        Label init_done;
+        Label init_zero;
 
         if (jcp.with_bias && one_of(jcp.prop_kind, forward_training,
                     forward_inference)) {
@@ -187,10 +185,7 @@ void jit_sse42_1x1_conv_kernel_f32::reduce_loop(int load_loop_blk, int ur,
     }; // init()
 
     auto store = [=]() {
-        jit_tagged_label store_done(
-                "store_done", load_loop_tag, bcast_loop_tag);
-        jit_tagged_label store_noadd(
-                "store_noadd", load_loop_tag, bcast_loop_tag);
+        Label store_noadd;
 
         if (!jcp.with_sum) {
             test(reg_reduce_pos_flag, FLAG_REDUCE_FIRST);
@@ -207,36 +202,51 @@ void jit_sse42_1x1_conv_kernel_f32::reduce_loop(int load_loop_blk, int ur,
 
         L(store_noadd);
 
-        if (jcp.with_eltwise) {
-            assert(ur * load_loop_blk < 14);
+        Label store_no_postops;
+        test(reg_reduce_pos_flag, FLAG_REDUCE_LAST);
+        jz(store_no_postops, T_NEAR);
 
-            jit_tagged_label store_norelu(
-                    "store_norelu", load_loop_tag, bcast_loop_tag);
-            test(reg_reduce_pos_flag, FLAG_REDUCE_LAST);
-            jz(store_norelu, T_NEAR);
+        int eltwise_inj_idx = 0;
+        int depthwise_inj_idx = 0;
+        const auto &p = attr_.post_ops_;
 
-            inject(eltwise_generator.prepareConstants(jcp.eltwise_alpha, jcp.eltwise_beta));
+        int end_idx = jcp.with_dw_conv ? p.find(primitive_kind::convolution) : p.len_;
+        for (int i = 0; i < end_idx; i++) {
+            auto& post_op = p.entry_[i];
+            if (post_op.is_eltwise()) {
+                eltwise_injectors[eltwise_inj_idx]->compute_vector_range(1, 2 * ur * load_loop_blk + 1);
+                eltwise_inj_idx++;
+            } else if (post_op.is_depthwise()) {
+                mov(reg_d_weights, reinterpret_cast<size_t>(post_op.depthwise.weights_data));
+                mov(reg_d_bias, reinterpret_cast<size_t>(post_op.depthwise.biases_data));
 
-            // TODO (dmitrygo): need to find appropriate way to share labels.
-            mov(imm_addr64, l_table);
-            for (int half = 0; half < 2; half++) {
-                for (int j = 0; j < ur; ++j) {
-                    for (int i = 0; i < load_loop_blk; ++i) {
-                        inject(eltwise_generator.computeVector(reg_accum(i, j, half), reg_accum(i, j, half)));
+                add(reg_d_weights, reg_oc_off);
+                add(reg_d_bias, reg_oc_off);
+
+                for (int j = 0; j < load_loop_blk; ++j) {
+                    for (int k = 0; k < 2; k++) {
+                        int start_idx = reg_accum(j, 0, k).getIdx();
+                        int end_idx = reg_accum(j, ur, k).getIdx();
+
+                        depthwise_injectors[depthwise_inj_idx]->compute_vector_range(
+                                start_idx, end_idx, reg_d_weights, reg_d_bias);
+
+                        add(reg_d_weights, 4 * sizeof(float));
+                        add(reg_d_bias, 4 * sizeof(float));
                     }
                 }
-            }
 
-            L(store_norelu);
+                depthwise_inj_idx++;
+            }
         }
+
+        L(store_no_postops);
 
         for (int j = 0; j < ur; ++j)
             for (int i = 0; i < load_loop_blk; ++i) {
                 movups(output_ptr(i, j, 0), reg_accum(i, j, 0));
                 movups(output_ptr(i, j, 1), reg_accum(i, j, 1));
             }
-
-        L(store_done);
     };
 
     auto fma_block = [=](bool last_block) {
@@ -265,9 +275,8 @@ void jit_sse42_1x1_conv_kernel_f32::reduce_loop(int load_loop_blk, int ur,
         } // for reduce_loop_unroll
     };
 
-    jit_tagged_label reduce_loop("reduce_loop", load_loop_tag, bcast_loop_tag);
-    jit_tagged_label reduce_loop_tail(
-            "reduce_loop_tail", load_loop_tag, bcast_loop_tag);
+    Label reduce_loop;
+    Label reduce_loop_tail;
 
     mov(aux_reg_load_data, reg_load_data);
     mov(aux_reg_bcast_data, aux1_reg_bcast_data);
@@ -292,16 +301,13 @@ void jit_sse42_1x1_conv_kernel_f32::reduce_loop(int load_loop_blk, int ur,
     store();
 } // reduce_loop()
 
-void jit_sse42_1x1_conv_kernel_f32::diff_bias_loop(int load_loop_blk,
-        char load_loop_tag)
+void jit_sse42_1x1_conv_kernel_f32::generate_diff_bias_loop(int load_loop_blk)
 {
     if (!jcp.with_bias || jcp.prop_kind != backward_weights)
         return;
 
-    jit_tagged_label diff_bias_loop("diff_bias_loop", load_loop_tag);
-    jit_tagged_label diff_bias_loop_out("diff_bias_loop_out", load_loop_tag);
-    jit_tagged_label diff_bias_init_out("diff_bias_init_out", load_loop_tag);
-    jit_tagged_label diff_bias_load("diff_bias_load", load_loop_tag);
+    Label diff_bias_loop, diff_bias_loop_out, diff_bias_init_out;
+    Label diff_bias_load;
 
     auto diff_bias_ptr = [=](int i, int n) {
         return ptr[reg_diff_bias_data + i * jcp.oc_block * sizeof(float)+ 4*n*sizeof(float)];
@@ -363,17 +369,23 @@ void jit_sse42_1x1_conv_kernel_f32::diff_bias_loop(int load_loop_blk,
 
 void jit_sse42_1x1_conv_kernel_f32::generate()
 {
-    if (jcp.with_eltwise) {
-        nstl::vector<int> shared_vecs;
-        shared_vecs.push_back(0);
-        shared_vecs.push_back(13);
-        shared_vecs.push_back(14);
-        shared_vecs.push_back(15);
-
-        nstl::vector<Reg64> shared_regs;
-        shared_regs.push_back(imm_addr64);
-
-        eltwise_generator.init(jcp.eltwise_alg, shared_vecs, shared_regs);
+    const auto &p = attr_.post_ops_;
+    int end_idx = jcp.with_dw_conv ? p.find(primitive_kind::convolution) : p.len_;
+    for (int i = 0; i < end_idx; i++) {
+        auto &post_op = p.entry_[i];
+        if (post_op.is_eltwise()) {
+            eltwise_injectors.push_back(new jit_uni_eltwise_injector_f32<sse42>(
+                    this,
+                    post_op.eltwise.alg,
+                    post_op.eltwise.alpha,
+                    post_op.eltwise.beta
+            ));
+        } else if (post_op.is_depthwise()) {
+            depthwise_injectors.push_back(new jit_uni_depthwise_injector_f32<sse42>(
+                    this,
+                    post_op.depthwise.alg
+            ));
+        }
     }
 
     preamble();
@@ -393,12 +405,13 @@ void jit_sse42_1x1_conv_kernel_f32::generate()
     mov(reg_load_loop_work, ptr[param1 + GET_OFF(load_dim)]);
     mov(reg_bcast_loop_work, ptr[param1 + GET_OFF(bcast_dim)]);
     mov(reg_reduce_loop_work, ptr[param1 + GET_OFF(reduce_dim)]);
-    mov(reg_reduce_pos_flag, ptr[param1 + GET_OFF(reduce_pos_flag)]);
+    mov(reg_reduce_pos_flag, ptr[param1 + GET_OFF(first_last_flag)]);
     if (jcp.prop_kind == backward_weights)
         mov(reg_output_stride, ptr[param1 + GET_OFF(output_stride)]);
+    mov(reg_oc_off, ptr[param1 + GET_OFF(oc_off)]);
 
-    auto load_loop_body = [=] (int load_loop_blk, char bcast_loop_tag) {
-        bcast_loop(load_loop_blk, bcast_loop_tag);
+    auto generate_load_loop_body = [=] (int load_loop_blk) {
+        generate_bcast_loop(load_loop_blk);
         add(reg_load_data, load_loop_blk * jcp.load_loop_load_step);
         switch (jcp.prop_kind) {
         case forward_training:
@@ -423,12 +436,13 @@ void jit_sse42_1x1_conv_kernel_f32::generate()
             assert(!"invalid prop_kind");
         }
         sub(reg_load_loop_work, load_loop_blk * jcp.load_loop_iter_step);
+        add(reg_oc_off, load_loop_blk * jcp.oc_block * sizeof(float));
     };
 
-    const char *load_loop_blk_8 = "load_loop_blk_8";
-    const char *load_loop_blk_16 = "load_loop_blk_16";
-    const char *load_loop_blk_24 = "load_loop_blk_24";
-    const char *load_loop_blk_end = "load_loop_blk_end";
+    Label load_loop_blk_8;
+    Label load_loop_blk_16;
+    Label load_loop_blk_24;
+    Label load_loop_blk_end;
 
     cmp(reg_load_loop_work, 8);
     jle(load_loop_blk_8, T_NEAR);
@@ -440,8 +454,8 @@ void jit_sse42_1x1_conv_kernel_f32::generate()
     jle(load_loop_blk_16, T_NEAR);
 
     L(load_loop_blk_24); {
-        diff_bias_loop(3, '3');
-        load_loop_body(3, '3');
+        generate_diff_bias_loop(3);
+        generate_load_loop_body(3);
         cmp(reg_load_loop_work, 32);
         je(load_loop_blk_16);
         cmp(reg_load_loop_work, 24);
@@ -452,8 +466,8 @@ void jit_sse42_1x1_conv_kernel_f32::generate()
     jle(load_loop_blk_8, T_NEAR);
 
     L(load_loop_blk_16); {
-        diff_bias_loop(2, '2');
-        load_loop_body(2, '2');
+        generate_diff_bias_loop(2);
+        generate_load_loop_body(2);
         cmp(reg_load_loop_work, 16);
         jge(load_loop_blk_16);
     }
@@ -461,8 +475,8 @@ void jit_sse42_1x1_conv_kernel_f32::generate()
     L(load_loop_blk_8); {
         cmp(reg_load_loop_work, 0);
         je(load_loop_blk_end, T_NEAR);
-        diff_bias_loop(1, '1');
-        load_loop_body(1, '1');
+        generate_diff_bias_loop(1);
+        generate_load_loop_body(1);
     }
 
     L(load_loop_blk_end);
@@ -472,48 +486,40 @@ void jit_sse42_1x1_conv_kernel_f32::generate()
 
     postamble();
 
-    if (jcp.with_eltwise) {
-        // TODO (dmitrygo): need to find appropriate way to share labels.
-        align(64);
-        L(l_table);
-        inject(eltwise_generator.prepareTable());
-        eltwise_generator.release();
-    }
+    for (auto& inj : eltwise_injectors)
+        inj->prepare_table();
 }
 
 bool jit_sse42_1x1_conv_kernel_f32::post_ops_ok(
         jit_1x1_conv_conf_t &jcp, const primitive_attr_t &attr) {
     const auto &p = attr.post_ops_;
 
-    auto is_eltwise = [&](int idx) { return p.entry_[idx].is_eltwise(); };
-    auto is_sum = [&](int idx) { return p.entry_[idx].is_sum(); };
-    auto is_dw_conv = [&](int idx) { return p.entry_[idx].is_dw_conv(); };
+    int dw_conv_idx = p.find(primitive_kind::convolution);
+    bool with_dw_conv = dw_conv_idx != -1;
 
-    switch (p.len_) {
-    case 0: return true; // no post_ops
-    case 1:
-        return true // sum OR eltwise OR dw_conv
-                && !jcp.with_eltwise && (is_eltwise(0) || is_sum(0) || is_dw_conv(0));
-    case 2:
-        return true // sum->eltwise or dw_conv->eltwise or eltwise->dw_conv or dw_conv->sum
-                && !jcp.with_eltwise && ((is_sum(0) && is_eltwise(1)) || (is_dw_conv(0) && is_eltwise(1)) ||
-                                         (is_eltwise(0) && is_dw_conv(1)) || (is_dw_conv(0) && is_sum(1)));
-    case 3:
-        return true // eltwise->dw_conv->eltwise or dw_conv->sum->eltwise
-                && !jcp.with_eltwise && ((is_eltwise(0) && is_dw_conv(1) && is_eltwise(2)) ||
-                                         (is_dw_conv(0) && is_sum(1) && is_eltwise(2)));
-    case 4: return true // eltwise->dw_conv->sum->eltwise
-            && !jcp.with_eltwise && (is_eltwise(0) && is_dw_conv(1) && is_sum(2) && is_eltwise(3));
-    default: return false;
-    }
+    auto all_post_ops_supported = [&]() {
+        bool ok = true;
 
-    return false;
+        int end_idx = with_dw_conv ? dw_conv_idx : p.len_;
+        for (int i = 0; i < end_idx; i++) {
+            ok = ok && utils::one_of(p.entry_[i].kind, primitive_kind::sum, primitive_kind::eltwise, primitive_kind::depthwise);
+        }
+        return ok;
+    };
+    auto contain = [&](mkldnn::impl::primitive_kind_t kind) { return p.find(kind, 0, dw_conv_idx) != -1; };
+    auto position = [&](mkldnn::impl::primitive_kind_t kind) { return p.find(kind, 0, dw_conv_idx); };
+    auto count = [&](mkldnn::impl::primitive_kind_t kind) { return p.count(kind, 0, dw_conv_idx); };
+
+    return all_post_ops_supported() &&
+           count(primitive_kind::sum) <= 1 &&
+           IMPLICATION(contain(primitive_kind::sum), position(primitive_kind::sum) == 0) &&
+           IMPLICATION(with_dw_conv, !contain(primitive_kind::sum));
 }
 
 status_t jit_sse42_1x1_conv_kernel_f32::init_conf(jit_1x1_conv_conf_t &jcp,
         const convolution_desc_t &cd, const memory_desc_wrapper &src_d,
         const memory_desc_wrapper &weights_d, const memory_desc_wrapper &dst_d,
-        const primitive_attr_t &attr, bool with_relu, float relu_negative_slope)
+        const primitive_attr_t &attr)
 {
     if (!mayiuse(sse42))
         return status::unimplemented;
@@ -521,6 +527,7 @@ status_t jit_sse42_1x1_conv_kernel_f32::init_conf(jit_1x1_conv_conf_t &jcp,
     // TODO (Roma): this code is duplicated from the generic kernel; maybe the
     // configuration struct could do some stuff below
     const bool with_groups = weights_d.ndims() == src_d.ndims() + 1;
+    const int ndims = src_d.ndims();
 
     jcp.prop_kind = cd.prop_kind;
 
@@ -528,124 +535,83 @@ status_t jit_sse42_1x1_conv_kernel_f32::init_conf(jit_1x1_conv_conf_t &jcp,
     jcp.mb = src_d.dims()[0];
 
     jcp.oc = dst_d.dims()[1] / jcp.ngroups;
+    jcp.oc_without_padding = jcp.oc;
     jcp.ic = src_d.dims()[1] / jcp.ngroups;
 
-    jcp.ih = src_d.dims()[2];
-    jcp.iw = src_d.dims()[3];
-    jcp.oh = dst_d.dims()[2];
-    jcp.ow = dst_d.dims()[3];
+    jcp.ih = (ndims == 3) ? 1 : src_d.dims()[2];
+    jcp.iw = src_d.dims()[ndims - 1];
+    jcp.oh = (ndims == 3) ? 1 : dst_d.dims()[2];
+    jcp.ow = dst_d.dims()[ndims - 1];
 
-    jcp.kh = weights_d.dims()[with_groups + 2];
-    jcp.kw = weights_d.dims()[with_groups + 3];
+    jcp.kh = (ndims == 3) ? 1 : weights_d.dims()[with_groups + 2];
+    jcp.kw = weights_d.dims()[with_groups + ndims - 1];
 
-    jcp.t_pad = cd.padding[0][0];
-    jcp.l_pad = cd.padding[0][1];
+    jcp.t_pad = (ndims == 3) ? 0 : cd.padding[0][0];
+    jcp.l_pad = cd.padding[0][ndims - 3];
 
-    jcp.stride_h = cd.strides[0];
-    jcp.stride_w = cd.strides[1];
+    jcp.stride_h = (ndims == 3) ? 1 : cd.strides[0];
+    jcp.stride_w = cd.strides[ndims - 3];
 
     jcp.src_fmt = src_d.format();
     jcp.with_bias = cd.bias_desc.format != memory_format::undef;
-    jcp.with_eltwise = with_relu;
-    jcp.eltwise_alpha = relu_negative_slope;
 
-    jcp.with_eltwise = with_relu;
-    jcp.eltwise_alg = mkldnn_eltwise_relu;
-    jcp.eltwise_alpha = relu_negative_slope;
+    jcp.src_dt = cd.src_desc.data_type;
+    jcp.bia_dt = jcp.with_bias ? cd.bias_desc.data_type : data_type::undef;
+    jcp.dst_dt = cd.dst_desc.data_type;
 
     if (!post_ops_ok(jcp, attr))
         return status::unimplemented;
 
     const auto &p = attr.post_ops_;
-    jcp.with_dw_conv = false;
+
     int dw_conv_ind = p.find(primitive_kind::convolution);
-    if (dw_conv_ind != -1) {
-        jcp.with_dw_conv = true;
-        jcp.dw_conv_in_h = p.entry_[dw_conv_ind].dw_conv.in_h;
-        jcp.dw_conv_in_w = p.entry_[dw_conv_ind].dw_conv.in_w;
-        jcp.dw_conv_ker_h = p.entry_[dw_conv_ind].dw_conv.ker_h;
-        jcp.dw_conv_ker_w = p.entry_[dw_conv_ind].dw_conv.ker_w;
-        jcp.dw_conv_str_h = p.entry_[dw_conv_ind].dw_conv.str_h;
-        jcp.dw_conv_str_w = p.entry_[dw_conv_ind].dw_conv.str_w;
-        jcp.dw_conv_weights = p.entry_[dw_conv_ind].dw_conv.weights_data;
-        jcp.dw_conv_biases = p.entry_[dw_conv_ind].dw_conv.biases_data;
-    }
-
-    if (!jcp.with_eltwise) {
-        int eltwise_ind = p.find(primitive_kind::eltwise, 0, dw_conv_ind);
-        if (eltwise_ind != -1) {
-            jcp.with_eltwise  = true;
-            jcp.eltwise_alg   = p.entry_[eltwise_ind].eltwise.alg;
-            jcp.eltwise_alpha = p.entry_[eltwise_ind].eltwise.alpha;
-            jcp.eltwise_beta  = p.entry_[eltwise_ind].eltwise.beta;
-            jcp.eltwise_scale = p.entry_[eltwise_ind].eltwise.scale;
-        }
-    }
-
+    jcp.with_dw_conv = dw_conv_ind != -1;
     if (jcp.with_dw_conv) {
-        int dw_conv_eltwise_ind = p.find(primitive_kind::eltwise, dw_conv_ind);
-        if (dw_conv_eltwise_ind != -1) {
-            jcp.dw_conv_with_eltwise = true;
-            jcp.dw_conv_eltwise_alg = p.entry_[dw_conv_eltwise_ind].eltwise.alg;
-            jcp.dw_conv_eltwise_alpha = p.entry_[dw_conv_eltwise_ind].eltwise.alpha;
-            jcp.dw_conv_eltwise_beta = p.entry_[dw_conv_eltwise_ind].eltwise.beta;
-        }
+        jcp.dw_conv_oh = jcp.oh;
+        jcp.dw_conv_ow = jcp.ow;
+        jcp.oh = p.entry_[dw_conv_ind].dw_conv.in_h;
+        jcp.ow = p.entry_[dw_conv_ind].dw_conv.in_w;
+
+        jcp.dw_conv_dst_dt = jcp.dst_dt;
+        jcp.dst_dt = p.entry_[dw_conv_ind].dw_conv.in_dt;
     }
 
     jcp.with_sum = p.find(primitive_kind::sum, 0, dw_conv_ind) != -1;
-    if (jcp.with_dw_conv) {
-        jcp.dw_conv_with_sum = p.find(primitive_kind::sum, dw_conv_ind) != -1;
-    }
-
-    if (jcp.with_dw_conv) {
-        jcp.oh = jcp.dw_conv_in_h;
-        jcp.ow = jcp.dw_conv_in_w;
-    }
 
     jcp.os = jcp.oh * jcp.ow;
     jcp.is = jcp.ih * jcp.iw;
 
-    constexpr memory_format_t weights_formats[2][2] = {
-        { OIhw8i8o, OIhw8o8i },
-        { gOIhw8i8o, gOIhw8o8i }
-    };
-    memory_format_t weights_format
-        = weights_formats[with_groups][jcp.prop_kind == backward_data];
+    const int is_bwd_d = jcp.prop_kind == backward_data;
+    memory_format_t weights_format = with_groups
+        ? utils::pick(2 * ndims - 6 + is_bwd_d, gOIw8i8o, gOIw8o8i, gOIhw8i8o,
+            gOIhw8o8i)
+        : utils::pick(2 * ndims - 6 + is_bwd_d, OIw8i8o, OIw8o8i, OIhw8i8o,
+            OIhw8o8i);
 
     bool args_ok = true
         && jcp.ngroups == 1
-        && src_d.format() == nChw8c
+        && one_of(src_d.format(), nCw8c, nChw8c)
         && weights_d.format() == weights_format
         && one_of(cd.bias_desc.format, memory_format::undef, any, x)
-        && dst_d.format() == nChw8c;
+        && one_of(dst_d.format(), nCw8c, nChw8c);
     if (!args_ok) return status::unimplemented;
 
     const int simd_w = 4;
 
+    jcp.oc = rnd_up(jcp.oc, simd_w*2);
+    jcp.ic = rnd_up(jcp.ic, simd_w*2);
+
+    jcp.ic_block = jcp.oc_block = simd_w*2;
+
     args_ok = true
-        && jcp.oc % simd_w == 0 && jcp.ic % simd_w == 0
+        && jcp.oc % jcp.oc_block == 0
+        && jcp.ic % jcp.ic_block == 0
         && jcp.t_pad == 0 && jcp.l_pad == 0
         && jcp.stride_w == 1 && jcp.stride_h == 1 // TODO: support some strides
         && jcp.kh == 1 && jcp.kw == 1;
     if (!args_ok) return status::unimplemented;
 
-    jcp.ic_block = jcp.oc_block = simd_w*2;
-
     jcp.ur = 1;
-
-    if (jcp.with_eltwise) {
-        int nvecs_elt = jit_uni_eltwise_vector_f32<sse42>::sharedVecsCount(jcp.eltwise_alg);
-        int nvecs_conv = 16 - nvecs_elt;
-        while (2 * jcp.ur * 3 > nvecs_conv) {
-            if (jcp.ur <= 1) {
-                break;
-            }
-            jcp.ur -= 1;
-        }
-
-        if (2 * jcp.ur * 3 > nvecs_conv)
-            return status::unimplemented;
-    }
 
     int load_blocking{ 0 };
     int load_blocking_max{ 0 };
@@ -783,6 +749,24 @@ status_t jit_sse42_1x1_conv_kernel_f32::init_conf(jit_1x1_conv_conf_t &jcp,
     jcp.nb_reduce = div_up(jcp.reduce_dim, jcp.reduce_block);
 
     return status::success;
+}
+
+void jit_sse42_1x1_conv_kernel_f32::init_scratchpad(
+        memory_tracking::registrar_t &scratchpad,
+        const jit_1x1_conv_conf_t &jcp, const jit_conv_conf_t &jcp_dw) {
+    using namespace mkldnn::impl::memory_tracking::names;
+
+    if (jcp.prop_kind != backward_data && jcp.oc != jcp.oc_without_padding)
+        scratchpad.book(key_conv_padded_bias, sizeof(float) * jcp.oc);
+
+    if (jcp.with_dw_conv) {
+        const int nthreads = mkldnn_get_max_threads();
+        size_t dw_conv_buffer_size_ = (size_t)jcp_dw.kh * jcp_dw.iw * jcp_dw.ch_block * (jcp.oc / jcp.oc_block);
+        scratchpad.book(key_dw_conv_buffer, sizeof(float) * dw_conv_buffer_size_ * nthreads);
+
+        if (jcp.oc != jcp.oc_without_padding)
+            scratchpad.book(key_dw_conv_padded_bias, sizeof(float) * jcp.oc);
+    }
 }
 
 }

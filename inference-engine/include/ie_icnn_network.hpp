@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -17,6 +16,7 @@
 #include "details/ie_irelease.hpp"
 #include "ie_preprocess.hpp"
 #include "ie_input_info.hpp"
+#include "ie_icnn_network_stats.hpp"
 #include "ie_iextension.h"
 #include <memory>
 #include <map>
@@ -34,6 +34,8 @@ using OutputsDataMap = std::map<std::string, DataPtr>;
  */
 class ICNNNetwork : public details::IRelease {
 public:
+    using Ptr = std::shared_ptr<ICNNNetwork>;
+
     /**
      * @brief Returns the main network operating precision.
      * This may be MIXED if not homogeneous.
@@ -119,33 +121,47 @@ public:
     virtual StatusCode getLayerByName(const char* layerName, CNNLayerPtr& out, ResponseDesc* resp) const noexcept = 0;
 
     /**
+     * @deprecated Deprecated since TargetDevice is deprecated. Specify target device in InferenceEngine::Core directly.
      * @brief Sets a desirable device to perform all work on.
      * Some plug-ins might not support some target devices and may abort execution with an appropriate error message.
      * @param device Device to set as a target
      */
+    #ifndef _WIN32
+    INFERENCE_ENGINE_DEPRECATED
+    #endif
     virtual void setTargetDevice(TargetDevice device) noexcept = 0;
 
     /**
+     * @deprecated Deprecated since TargetDevice is deprecated
      * @brief Gets the target device.
      * If setTargetDevice() was not called before, returns eDefault
      * @return A TargetDevice instance
      */
+    #ifndef _WIN32
+    INFERENCE_ENGINE_DEPRECATED
+    #endif
     virtual TargetDevice getTargetDevice() const noexcept = 0;
 
     /**
-     * @deprecated use setBatchSize with ResponseDesc to get error message
+     * @deprecated Use ICNNNetwork::setBatchSize(size_t, ResponseDesc*)
      * @brief Changes the inference batch size
      */
-    virtual StatusCode setBatchSize(const size_t size) noexcept = 0;
+    INFERENCE_ENGINE_DEPRECATED
+    virtual StatusCode setBatchSize(const size_t size) noexcept {
+        ResponseDesc resp;
+        return setBatchSize(size, &resp);
+    }
 
     /**
      * @brief Changes the inference batch size.
-     * @note There are several limitations and it's not recommended to use it. Set batch to the input shape and call @reshape.
+     * @note There are several limitations and it's not recommended to use it. Set batch to the input shape and call ICNNNetwork::reshape.
      * @param size Size of batch to set
      * @return Status code of the operation
-     * @note: Current implementation of the function sets batch size to the first dimension of 4D input layers in the networks
-     * and starts shape inference for IR starting from v3, for IR v2 it sets batch to the first dimension for all layers.
-     * Custom layers might require custom shape infer implementation, use @IShapeInferExtension interface to register them.
+     * @note: Current implementation of the function sets batch size to the first dimension of all layers in the networks.
+     * Before calling it make sure that all your layers have batch in the first dimension, otherwise the method works incorrectly.
+     * This limitation is resolved via shape inference feature
+     * by using InferenceEngine::ICNNNetwork::reshape method.
+     * To read more refer to the Shape Inference section in documentation
      */
     virtual StatusCode setBatchSize(size_t size, ResponseDesc* responseDesc) noexcept = 0;
 
@@ -161,13 +177,12 @@ public:
     using InputShapes = std::map<std::string, SizeVector>;
 
     /**
-    * @brief - Run shape inference with new input shapes for the network
-    * @param inputShapes - map of pairs: name of corresponding data and its dimension.
-     * @note currently all inputs are required
-    * @param resp Pointer to the response message that holds a description of an error if any occurred
-    * @return Status code of the operation
-    */
-    virtual StatusCode reshape(const InputShapes& inputShapes, ResponseDesc* resp) noexcept { return NOT_IMPLEMENTED; };
+     * @brief Run shape inference with new input shapes for the network
+     * @param inputShapes - map of pairs: name of corresponding data and its dimension.
+     * @param resp Pointer to the response message that holds a description of an error if any occurred
+     * @return Status code of the operation
+     */
+    virtual StatusCode reshape(const InputShapes& /*inputShapes*/, ResponseDesc* /*resp*/) noexcept { return NOT_IMPLEMENTED; };
 
     /**
      * @brief Registers extension within the plugin
@@ -176,6 +191,16 @@ public:
      * @return Status code of the operation. OK if succeeded
      */
     virtual StatusCode
-    AddExtension(const IShapeInferExtensionPtr& extension, ResponseDesc* resp) noexcept { return NOT_IMPLEMENTED; };
+    AddExtension(const IShapeInferExtensionPtr& /*extension*/, ResponseDesc* /*resp*/) noexcept { return NOT_IMPLEMENTED; };
+
+    virtual StatusCode getStats(ICNNNetworkStats** /*stats*/, ResponseDesc* /*resp*/) const noexcept { return NOT_IMPLEMENTED; };
+
+    /**
+     * @brief Serialize network to IR and weights files.
+     * @param xmlPath Path to output IR file.
+     * @param binPath Path to output weights file.
+     * @return Status code of the operation
+     */
+    virtual StatusCode serialize(const std::string &xmlPath, const std::string &binPath, ResponseDesc* resp) const noexcept = 0;
 };
 }  // namespace InferenceEngine

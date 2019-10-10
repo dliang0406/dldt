@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -10,6 +9,7 @@
 #include <gmock/gmock-more-actions.h>
 #include "mock_icnn_network.hpp"
 #include "cpp/ie_cnn_network.h"
+#include "details/ie_cnn_network_tools.h"
 
 namespace GraphTest {
 
@@ -30,8 +30,8 @@ class GraphTestsBase : public ::testing::Test {
     std::vector<CNNLayerPtr> layers;
     std::vector<std::vector<DataPtr>> datas;
 
-    MockICNNNetwork mockNet;
-    InferenceEngine::CNNNetwork wrap = InferenceEngine::CNNNetwork(&mockNet);
+    std::shared_ptr<MockICNNNetwork> mockNet;
+    InferenceEngine::CNNNetwork wrap;
 
     /**
      * layers that are used as lhs in oriented connect operations
@@ -40,25 +40,30 @@ class GraphTestsBase : public ::testing::Test {
     std::unordered_set<CNNLayerPtr> rhsLayers;
 
     virtual void prepareInputs(InputsDataMap &inputsMap, int batchSize = 1) {
-        for (auto layer = lhsLayers.begin(); layer != lhsLayers.end(); layer++) {
-            if ((*layer)->insData.empty()) {
-                auto info = make_shared<InputInfo>();
-                auto data = make_shared<Data>((*layer)->name, Precision::FP32, Layout::C);
-                SizeVector dims = data->getDims();
-                dims.push_back(batchSize);
-                data->setDims(dims);
-                for (auto output : (*layer)->outData) {
-                    data->getInputTo() = output->inputTo;
+        auto prepareInputsInternal = [&inputsMap, &batchSize](std::unordered_set<CNNLayerPtr> & layersSet) {
+            for (auto layer = layersSet.begin(); layer != layersSet.end(); layer++) {
+                if ((*layer)->insData.empty()) {
+                    auto info = make_shared<InputInfo>();
+                    auto data = make_shared<Data>((*layer)->name, Precision::FP32, Layout::NC);
+                    SizeVector dims = data->getDims();
+                    dims.push_back(batchSize);
+                    dims.push_back(batchSize);
+                    data->setDims(dims);
+                    for (auto output : (*layer)->outData) {
+                        data->getInputTo() = output->getInputTo();
+                    }
+                    data->getCreatorLayer() = (*layer);
+                    info->setInputData(data);
+                    inputsMap[(*layer)->name] = info;
                 }
-                data->creatorLayer = (*layer);
-                info->setInputData(data);
-                inputsMap[(*layer)->name] = info;
             }
-        }
+        };
+        prepareInputsInternal(lhsLayers);
+        prepareInputsInternal(rhsLayers);
     }
 
     CNNLayerPtr layerByName(std::string name) {
-        auto sorted = CNNNetSortTopologically(mockNet);
+        auto sorted = InferenceEngine::details::CNNNetSortTopologically(*mockNet);
 
         auto i = std::find_if(sorted.begin(), sorted.end(), [&](CNNLayerPtr l){
             return l->name == name;
@@ -68,33 +73,99 @@ class GraphTestsBase : public ::testing::Test {
         }
         return nullptr;
     }
+
+
+    #define ASSERT_N_CONNECTIONS(a, b, n) \
+        ASSERT_EQ(countForwardConnections(#a, #b), n);\
+        ASSERT_EQ(countBackwardConnections(#a, #b), n)
+
+    #define ASSERT_MN_CONNECTIONS(a, b, m, n) \
+        ASSERT_EQ(countForwardConnections(#a, #b), m);\
+        ASSERT_EQ(countBackwardConnections(#a, #b), n)
+
     #define ASSERT_CONNECTION(a, b) \
-        ASSERT_TRUE(assertConnection(#a, #b));
+        ASSERT_N_CONNECTIONS(a,b,1)
 
-    bool assertConnection(std::string a, std::string b) {
+    #define ASSERT_PORT_CONNECTION(a, from_port, b, to_port) \
+        ASSERT_EQ(countForwardConnections(#a, #b, from_port), 1);\
+        ASSERT_EQ(countBackwardConnections(#a, #b, to_port), 1)
 
-        bool bForward = false;
-        for (auto && outData : wrap.getLayerByName(a.c_str())->outData) {
-            auto &inputMap = outData->inputTo;
-            auto i =
-                std::find_if(inputMap.begin(), inputMap.end(), [&](std::map<std::string, CNNLayerPtr>::value_type &vt) {
+    #define ASSERT_2_CONNECTIONS(a, b) \
+        ASSERT_N_CONNECTIONS(a,b,2)
+
+    #define ASSERT_3_CONNECTIONS(a, b) \
+        ASSERT_N_CONNECTIONS(a,b,3)
+
+    /**
+     * @brief check connection without direction
+     */
+    #define ASSERT_NO_CONNECTION(a, b) \
+        ASSERT_EQ(countConnections(#a, #b), 0);\
+        ASSERT_EQ(countConnections(#b, #a), 0)
+
+    void ASSERT_DIMS(int x, const SizeVector & dims) {
+
+        ASSERT_EQ(datas[x].front()->getDims().size(), dims.size());
+        for(size_t i = 0; i != dims.size(); i++) {
+            ASSERT_EQ(datas[x].front()->getDims()[i], dims[i]);
+        }
+    }
+
+    int countForwardConnections(std::string a, std::string b, int from_port_id=-1) {
+        long int nForward = 0;
+        CNNLayerPtr layerExist;
+        try {
+            layerExist = wrap.getLayerByName(a.c_str());
+            if (!layerExist) {
+                return 0;
+            }
+        } catch(...) {
+            return 0;
+        }
+
+        for (auto && outData : layerExist->outData) {
+            if (from_port_id != -1) {
+                if (from_port_id > 0) {
+                    from_port_id--;
+                    continue;
+                }
+            }
+            auto &inputMap = outData->getInputTo();
+            nForward +=
+                std::count_if(inputMap.begin(), inputMap.end(), [&](std::map<std::string, CNNLayerPtr>::value_type &vt) {
                     return vt.second->name == b;
                 });
-            if (i != inputMap.end()) {
-                bForward = true;
-                break;
+        }
+
+        return nForward;
+    }
+
+    int countBackwardConnections(std::string a, std::string b, int from_port_id=-1) {
+        CNNLayerPtr layerExist;
+        try {
+            layerExist = wrap.getLayerByName(b.c_str());
+            if (!layerExist) {
+                return 0;
             }
-        }
-        if (!bForward) {
-            return false;
+        } catch(...) {
+            return 0;
         }
 
-        auto prevData = wrap.getLayerByName(b.c_str())->insData;
-
-        auto j = std::find_if(prevData.begin(), prevData.end(), [&](DataWeakPtr wp) {
+        auto countRef = [&](DataWeakPtr wp) {
             return wp.lock()->getCreatorLayer().lock()->name == a;
-        });
-        return  j != prevData.end();
+        };
+
+        if (from_port_id == -1) {
+            auto prevData = layerExist->insData;
+
+            return std::count_if(prevData.begin(), prevData.end(), countRef);
+        } else {
+            return countRef(layerExist->insData[from_port_id]);
+        }
+    }
+
+    int countConnections(std::string a, std::string b) {
+        return  countForwardConnections(a, b) + countBackwardConnections(a, b);
     }
 
     int numCreated = 0;
@@ -105,7 +176,7 @@ class GraphTestsBase : public ::testing::Test {
                                               Layout::NC);
 
         CNNLayerPtr newLayer = make_shared<GenericLayer>(LayerParams({name, "Generic_" + std::to_string(numCreated++), Precision::FP32}));
-        newData->creatorLayer = newLayer;
+        newData->getCreatorLayer() = newLayer;
         newLayer->outData.push_back(newData);
 
         return newLayer;
@@ -121,12 +192,13 @@ class GraphTestsBase : public ::testing::Test {
                 if (isMarked == end(inputLayers))
                     continue;
                 auto info = make_shared<InputInfo>();
-                auto data = make_shared<Data>((*layer)->name, Precision::FP32, Layout::C);
+                auto data = make_shared<Data>((*layer)->name, Precision::FP32, Layout::NC);
                 SizeVector dims = data->getDims();
+                dims.push_back(batchSize);
                 dims.push_back(batchSize);
                 data->setDims(dims);
                 for (auto output : (*layer)->outData) {
-                    data->getInputTo() = output->inputTo;
+                    data->getInputTo() = output->getInputTo();
                 }
                 info->setInputData(data);
                 inputsMap[(*layer)->name] = info;
@@ -158,18 +230,34 @@ class GraphTestsBase : public ::testing::Test {
      * Data corresponding to each layer sets up in outData
      * Likewise creator layer sets up for data in getCreatorLayer
      */
+    int _batchSize = 1;
     void SetUp() override {
+       mockNet = std::make_shared<MockICNNNetwork>();
+       wrap = InferenceEngine::CNNNetwork(std::dynamic_pointer_cast<ICNNNetwork>(mockNet));
+
         datas.resize(10);
         for (int i = 0; i < 10; i++) {
             layers.push_back(make_shared<CNNLayer>(LayerParams({std::to_string(i)})));
-            datas[i].push_back(make_shared<Data>(std::to_string(i), Precision::FP32, Layout::C));
+            datas[i].push_back(make_shared<Data>(std::to_string(i), Precision::FP32, Layout::NC));
             datas[i].back()->getCreatorLayer() = layers[i];
 
             SizeVector dims = datas[i].back()->getDims();
-            dims.push_back(1);
+            dims.push_back(_batchSize);
+            dims.push_back(_batchSize);
             datas[i].back()->setDims(dims);
 
             layers.back()->outData.push_back(datas[i].back());
+        }
+    }
+
+    void TearDown() override {
+        // Reset shared_pointer circular dependencies to mitigate memory leaks.
+        for (auto& items : datas) {
+            for (auto& data : items) {
+                for (auto& input : data->getInputTo()) {
+                    input.second.reset();
+                }
+            }
         }
     }
 
@@ -198,11 +286,12 @@ class GraphTestsBase : public ::testing::Test {
 
     void CONNECT_FROM_PORT(int x, int port, int y) {
         if (datas[x].size() <= port) {
-            datas[x].push_back(make_shared<Data>(std::string("split_") + std::to_string(datas[x].size()), Precision::FP32, Layout::C));
+            datas[x].push_back(make_shared<Data>(std::string("split_") + std::to_string(datas[x].size()), Precision::FP32, Layout::NC));
             datas[x].back()->getCreatorLayer() = layers[x];
 
             SizeVector dims = datas[x].back()->getDims();
-            dims.push_back(1);
+            dims.push_back(_batchSize);
+            dims.push_back(_batchSize);
             datas[x].back()->setDims(dims);
             layers[x]->outData.push_back(datas[x].back());
         }
@@ -210,6 +299,14 @@ class GraphTestsBase : public ::testing::Test {
         layers[y]->insData.push_back(datas[x][port]);
         lhsLayers.insert(layers[x]);
         rhsLayers.insert(layers[y]);
+    }
+
+    void SET_DIMS(int x, const SizeVector & dims) {
+        datas[x].front()->setDims(dims);
+    }
+
+    void SET_TYPE(int x, std::string name) {
+        layers[x]->type = name;
     }
 };
 

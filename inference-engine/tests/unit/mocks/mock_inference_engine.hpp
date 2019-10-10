@@ -1,5 +1,4 @@
-// Copyright (C) 2018 Intel Corporation
-//
+// Copyright (C) 2018-2019 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -39,5 +38,7 @@ public:
                                InferenceEngine::ResponseDesc * resp));
     MOCK_QUALIFIED_METHOD2(SetConfig, noexcept, InferenceEngine::StatusCode(const std::map<std::string, std::string> &,
                                                                             InferenceEngine::ResponseDesc *resp));
+
+    MOCK_QUALIFIED_METHOD1(GetName, const noexcept, void(std::string&));
 };
 

@@ -1,5 +1,5 @@
 """
- Copyright (c) 2018 Intel Corporation
+ Copyright (c) 2018-2019 Intel Corporation
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -19,7 +19,8 @@ from mo.front.common.partial_infer.inner_product import caffe_inner_product
 
 def fully_connected_ext(attr):
     node_attrs = {
-        'type': 'FullyConnected',
+        'op': 'MatMul',
+        'type': 'MatMul',
         'out-size': attr.int('num_hidden', None),
         'layout': 'NCHW',
         'infer': caffe_inner_product

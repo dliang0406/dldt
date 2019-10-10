@@ -19,6 +19,7 @@
 #include "nstl.hpp"
 #include "utils.hpp"
 #include "jit_generator.hpp"
+#include "type_helpers.hpp"
 
 #include "jit_uni_softmax.hpp"
 
@@ -27,13 +28,16 @@ namespace impl {
 namespace cpu {
 
 using namespace Xbyak;
+using namespace mkldnn::impl::status;
+using namespace mkldnn::impl::memory_format;
+using namespace mkldnn::impl::utils;
 
 template <cpu_isa_t isa>
-jit_uni_softmax_fwd_t<isa>::jit_uni_softmax_fwd_t(const pd_t *pd,
+jit_uni_softmax_fwd_t<isa>::jit_uni_softmax_fwd_t(const pd_t *apd,
         const input_vector &inputs, const output_vector &outputs)
-    : cpu_primitive_t(&conf_, inputs, outputs), conf_(*pd)
+        : cpu_primitive_t(apd, inputs, outputs)
 {
-    kernel_ = new jit_uni_softmax_kernel_f32<isa>(conf_.jpp_);
+    kernel_ = new jit_uni_softmax_kernel_f32<isa>(pd()->jpp_);
 }
 
 template <cpu_isa_t isa>
@@ -42,40 +46,74 @@ jit_uni_softmax_fwd_t<isa>::~jit_uni_softmax_fwd_t() {
 }
 
 template <cpu_isa_t isa>
-void jit_uni_softmax_fwd_t<isa>::execute_forward()
+void jit_uni_softmax_fwd_t<isa>::execute_forward() const
 {
     auto src = reinterpret_cast<const data_t *>(this->input_memory(0));
     auto dst = reinterpret_cast<data_t *>(this->memory(0));
 
-    const memory_desc_wrapper data_d(conf_.src_pd());
+    const memory_desc_wrapper data_d(pd()->src_pd());
 
-    const auto &jpp = conf_.jpp_;
+    const auto &jpp = pd()->jpp_;
 
-    size_t outer_size = utils::array_product(conf_.src_pd()->desc()->dims, conf_.desc()->softmax_axis);
+    size_t outer_size = utils::array_product(pd()->src_pd()->desc()->dims, pd()->desc()->softmax_axis);
 
     size_t dim = jpp.channels * jpp.inner_size;
 
-    auto ker = [&](const int ithr, const int nthr) {
-        size_t start{0}, end{0};
+    if (jpp.inner_size > 1) {
+        const size_t work_amount = outer_size;
 
-        const size_t work_amount = jpp.inner_size;
-        balance211(work_amount, nthr, ithr, start, end);
+        auto ker = [&](const int ithr, const int nthr) {
+            size_t start{0}, end{0};
 
-        for (size_t ou = 0; ou < outer_size; ++ou) {
-            jit_softmax_call_s args{};
-            args.channels = jpp.channels;
-            args.work = end - start;
-            size_t off = data_d.off_l(ou*dim + start);
-            args.src = src + off;
-            args.dst = dst + off;
+            balance211(work_amount, nthr, ithr, start, end);
 
-            (*kernel_)(&args);
-        }
-    };
+            size_t ou{0};
+            nd_iterator_init(start, ou, outer_size);
 
-#pragma omp parallel
-    {
-        ker(omp_get_thread_num(), omp_get_num_threads());
+            for (size_t iwork = start; iwork < end; ++iwork) {
+                auto args = jit_softmax_call_s();
+                args.channels = jpp.channels;
+                args.work = jpp.inner_size;
+                size_t off = data_d.off_l(ou * dim);
+                args.src = src + off;
+                args.dst = dst + off;
+
+                (*kernel_)(&args);
+
+                nd_iterator_step(ou, outer_size);
+            }
+        };
+
+        parallel(0, work_amount, ker);
+    } else {
+        int ou_blocks = div_up(outer_size, jpp.outer_block);
+        const size_t work_amount = ou_blocks;
+
+        auto ker = [&](const int ithr, const int nthr) {
+            size_t start{0}, end{0};
+
+            balance211(work_amount, nthr, ithr, start, end);
+
+            size_t oub{0};
+            nd_iterator_init(start, oub, ou_blocks);
+
+            for (size_t iwork = start; iwork < end; ++iwork) {
+                size_t work = nstl::min(jpp.outer_block, outer_size - oub * jpp.outer_block);
+
+                auto args = jit_softmax_call_s();
+                args.channels = jpp.channels;
+                args.work = work;
+                size_t off = data_d.off_l(oub * jpp.outer_block * dim);
+                args.src = src + off;
+                args.dst = dst + off;
+
+                (*kernel_)(&args);
+
+                nd_iterator_step(oub, ou_blocks);
+            }
+        };
+
+        parallel(0, work_amount, ker);
     }
 }
 
